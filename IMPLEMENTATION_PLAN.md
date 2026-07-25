@@ -365,7 +365,24 @@ npx expo-doctor                                                    # authoritati
 ### 5.3 Incompatibilities Flagged Before Code — the Three Real Risks
 
 **R-01 — New Architecture (Fabric/TurboModules) × `react-native-ble-plx`. HIGHEST RISK.**
-The New Architecture is enabled by default on modern Expo SDKs. `react-native-ble-plx` is a legacy-bridge native module that runs through the interop layer, and BLE libraries in that position have a history of subtle breakage — most dangerously in *notification callback delivery*, which is exactly the mechanism this entire app depends on. **Mitigation:** the very first thing built in Phase 3 is a throwaway spike that connects to `PL GT M201` and logs raw notifications on the default (New Arch) configuration. If notifications do not arrive reliably at 1 Hz, we set `"newArchEnabled": false` in `app.json` and re-verify. Everything else is worthless if this fails, so it is gated first and nothing is built on top of an unverified radio.
+
+> ### ⚠️ REVISED 2026-07-25 AFTER EMPIRICAL VERIFICATION — THE PLANNED MITIGATION DOES NOT EXIST
+>
+> The mitigation originally written here (*"set `newArchEnabled: false` and re-verify"*) **is not available on SDK 57**. Verified directly in `node_modules/@react-native/gradle-plugin/.../ReactRootProjectPlugin.kt`, which emits:
+>
+> > `WARNING: Setting newArchEnabled=false in your gradle.properties file is not supported anymore since React Native 0.82.`
+> > `The application will run with the New Architecture enabled by default.`
+>
+> Installed stack is **SDK 57.0.8 / RN 0.86.0**, so the New Architecture is **mandatory**. Additionally verified: `react-native-ble-plx@3.5.1` has **no `codegenConfig`** and ships **no TurboModule/Fabric spec** — it is a pure legacy-bridge module, and its latest release (2026-02-18) predates both RN 0.85 and RN 0.86. Expo's SDK 57 compatibility table has no pinned version for it at all (`expo install` treated it as an unmanaged "other package").
+>
+> `expo-doctor` passes 18/18, but that is **static analysis only** — it cannot detect whether notification callbacks actually arrive through the interop layer.
+>
+> **Revised fallback ladder, in order of preference:**
+> 1. Interop layer works — most likely outcome; it exists precisely to host legacy modules. Verify with the field spike.
+> 2. Downgrade to **Expo SDK 54** (RN 0.81), the last SDK where `newArchEnabled=false` is still honoured. This is now an SDK-level decision, not a config flag, and would forfeit ~10 months of platform fixes.
+> 3. Replace the BLE library with a New-Arch-native alternative — the largest change, and it would rewrite `bleAdapter.ts` (though, by design, nothing else).
+>
+> This is why `src/services/bleSimulator.ts` exists: every other Sprint 1 deliverable is exercised against a synthetic 1 Hz source, so none of them are blocked on this resolution.
 
 **R-02 — `expo-location` background task × `react-native-ble-plx` BLE subscription.**
 This is an architectural collision the docs never address, and it is the most likely thing to quietly break in the field. `expo-location`'s `startLocationUpdatesAsync` + `expo-task-manager` can deliver fixes into a **headless JS context** — a context in which the BLE `Device` object and its active notification subscription **do not exist**. If we naively write the location handler as a headless task and the BLE handler in the app context, the two streams live in different JS realms and cannot be joined into a single `trek_points` row.
@@ -661,3 +678,109 @@ Nothing below has been silently resolved. Items marked **BLOCKING** stop specifi
 Build Step 0 (git hygiene) and Step 1 (scaffold), then **stop at 1.8 and run the BLE notification spike before writing any other code.** R-01 (New Architecture × `react-native-ble-plx`) and G-01 (unknown frame layout) both live in that one experiment, and they are the two things that can invalidate downstream work. A day spent proving the radio delivers 1 Hz notifications on a real `PL GT M201` protects the entire sprint from being built on an unverified foundation.
 
 **Awaiting your explicit `PROCEED`.** I would also like answers to **G-03**, **G-06**, and **G-12** before Step 2 — and **G-16** before the first Android build.
+
+---
+
+# ADDENDUM — Sprint 1 Executed (2026-07-25)
+
+`PROCEED` received. This section records the product directives that closed open
+gaps, the version matrix as actually resolved, and what remains unverified.
+
+## 12. Directives Received and Where They Landed
+
+| Gap | Directive | Implemented in |
+| :--- | :--- | :--- |
+| **G-03** | Fusion policy **approved** as proposed | `src/services/trekWriter.ts` — telemetry-driven 1 Hz writes, last-known-fix attachment, 10 s staleness → NULL position |
+| **G-12** | Integrate AsyncStorage; Supabase GoTrue persists the JWT locally so one WiFi sign-in at WAWA HQ enables indefinite offline trailhead launches | `src/services/supabaseClient.ts`, `src/store/useAuthStore.ts` |
+| **G-11** | Add `react-native-maps` to the core stack (Google on Android) | `app.config.ts`, `LaunchpadScreen`, `LiveRecordingScreen` |
+| **G-06** | A UHI Hotspot is an **absolute-threshold counter**: every individual 1 Hz packet at **≥ 95 °F** increments it by 1. No clustering, no delta-above-mean | `HOTSPOT_THRESHOLD_F` in `src/utils/heatBand.ts`; counter in `useTelemetryStore.ingest` |
+
+### G-06 implementation note
+The threshold is compared in **Fahrenheit against the °F conversion of stored
+Celsius**, so the counter is independent of the Screen 3.3 display-unit toggle —
+two operators with different unit preferences walking the same transect get the
+same hotspot count. 95 °F is exactly the `--crit` band floor, so it captures
+Critical Heat **and** Extreme Danger, matching the directive's parenthetical.
+
+### G-12 implementation note — one honest limitation
+`getSession()` reads from AsyncStorage and needs **no network**, which is what
+makes the offline launch work. `getUser()` *does* require network, so the
+recording flow never calls it. Recording is gated on the **presence** of a cached
+session, not its freshness — an expired access token still permits local
+recording; only cloud sync needs a live token.
+
+The word "indefinitely" has one real caveat: a **refresh token can expire** if the
+device stays offline past its lifetime, which is a Supabase *project* setting the
+client cannot override. Because recording is gated on presence rather than
+validity, this does not block field work — but it will block sync until the
+volunteer next reaches connectivity and re-authenticates. **Recommend setting a
+long refresh-token lifetime on the Supabase project** to match the field reality.
+
+## 13. Version Matrix — RESOLVED (closes G-17)
+
+No versions were fabricated; all resolved against the live npm registry.
+
+| Package | Resolved | Notes |
+| :--- | :--- | :--- |
+| Expo SDK | **57.0.8** | `latest`. SDK 57.0.0 released 2026-06-30 |
+| react-native | **0.86.0** | New Architecture **mandatory** — see revised R-01 |
+| react | 19.2.3 | |
+| typescript | 6.0.3 | `baseUrl` is deprecated in TS 6; `paths` used without it |
+| expo-sqlite / expo-location / expo-task-manager | SDK-resolved (`~57.0.x`) | Never hand-pinned, per §5.2 |
+| **react-native-ble-plx** | **3.5.1 — pinned EXACTLY, no caret** | Published 2026-02-18, predates RN 0.85 **and** 0.86. No Expo SDK 57 pin exists |
+| react-native-maps | **1.27.2** | Expo's SDK 57 table pinned this, **not** npm-latest 1.29.0 |
+| @react-native-async-storage/async-storage | **2.2.0** | Expo pinned this, **not** npm-latest 3.1.1 |
+| zustand | ^5.0.14 | |
+| @supabase/supabase-js | ^2.110.8 | |
+
+The two Expo-downgraded pins are the reason `npx expo install` is mandatory over
+`npm install` for native modules — hand-pinning either to npm-latest would have
+produced a subtly broken build that `npm install` reports as successful.
+
+## 14. Verified vs. Unverified
+
+**Verified on this machine:**
+- `tsc --noEmit` — exit 0, `strict` + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`
+- `expo-doctor` — 18/18 checks passed
+- `expo config --type public` — resolves as SDK 57.0.0 with all four plugins
+- `expo prebuild --platform android` — succeeds; generated `AndroidManifest.xml` inspected and confirmed to contain the service override with `foregroundServiceType="location|connectedDevice"`, `stopWithTask="false"`, `tools:replace`, `BLUETOOTH_SCAN` with `neverForLocation`, and legacy Bluetooth capped at `maxSdkVersion="30"` — with exactly one `<application>` element
+
+**NOT verified — no Android SDK, no Java runtime, and no PL GT M201 on this machine:**
+- `npx expo run:android` has **never been executed**. The app has not been compiled or launched.
+- The Gradle **manifest merger** has not run, so the `tools:replace` override is confirmed only at the prebuild layer, not at merge time.
+- **R-01 remains open**: BLE notification delivery through the New Architecture interop layer is unproven.
+- **G-01 remains open**: the frame byte layout is still undocumented. `UNVERIFIED_DECODER` is active and `Screen 3.3` displays a standing warning banner while it is.
+
+## 15. Correction to §6.3 — how the service override actually works
+
+§6.3 assumed expo-location's `<service>` element would be present in the app
+manifest and editable in place. **That is wrong, and the original plugin failed
+because of it.**
+
+Verified reality: expo-location declares the service in its **library** manifest
+(`node_modules/expo-location/android/src/main/AndroidManifest.xml`) and the
+**Android Gradle manifest merger** folds it in at build time. It is absent from
+`android/app/src/main/AndroidManifest.xml` after prebuild, so a plugin that scans
+for it finds nothing and silently no-ops.
+
+The working mechanism is a **merger override**: declare the same service in the
+app manifest by fully-qualified name
+(`expo.modules.location.services.LocationTaskService`, from expo-location's Gradle
+namespace) carrying `tools:replace="android:foregroundServiceType"`.
+
+Second correction: user-plugin manifest mods run **before** Expo's internal mods
+populate `<application>`, so `getMainApplicationOrThrow` throws at that stage —
+which is exactly how the first version failed. The plugin now creates or reuses
+the application node defensively and never throws.
+
+## 16. Deferred, with reasons
+
+| Item | Why |
+| :--- | :--- |
+| Navigation library | No source document names one; `expo-router` vs `react-navigation` affects deep linking, the 1.4 hard gate, and back-button behaviour during recording. `src/store/useNavigationStore.ts` is a deliberately minimal, clearly-labelled stand-in. **Needs a decision.** |
+| CSV export (G-10) | In the PRD core loop and on Screen 3.2, but in no Sprint 1 task. No column spec, delimiter, encoding, filename convention, or target consumer (QGIS? ArcGIS? spreadsheet?) is defined — and that choice drives the headers |
+| Supabase sync + PostGIS schema | Sprint 1 is scoped "Architecture & Local Cache Baseline" |
+| Dark mode (G-08) | Tokens transcribed to `theme.ts`; not wired. No screen exposes a control |
+| Inter font (G-09) | Needs vendoring via `expo-font`; system default used meanwhile, which is what the wireframe actually renders |
+| Static map thumbnail (Screen 3.1) | Numeric summary implemented instead; snapshot rendering is cosmetic follow-up |
+| Tab bar icons | Wireframe uses inline SVG; would require `react-native-svg`, outside the approved stack. Text marks used at matching weight |

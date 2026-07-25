@@ -1,0 +1,218 @@
+/**
+ * Wireframe 3.2 — Profile & Cumulative Impact.
+ *
+ * The Impact Matrix (Total Mapped / Expeditions / UHI Hotspots) plus the session
+ * feed with per-row CSV download affordance.
+ *
+ * The UHI Hotspots figure uses the APPROVED G-06 definition: the sum of per-session
+ * counters, each incremented once per 1 Hz sample at or above 95 °F.
+ *
+ * CSV export is NOT implemented this sprint (G-10 — it appears in the PRD core loop
+ * and on this screen, but in no Sprint 1 task, and no column spec or target
+ * consumer format exists). The control is present and reports that honestly rather
+ * than silently doing nothing.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { LabelXS, PillDot, PortalHeader } from '@/components/atoms';
+import { TabBar } from '@/components/TabBar';
+import { COLORS, HEAT, SPACE, TABULAR_NUMS } from '@/config/theme';
+import { getCumulativeImpact, listSessions } from '@/database/sessionsRepo';
+import { selectAuthEmail, useAuthStore } from '@/store/useAuthStore';
+import { selectTemperatureUnit, useSettingsStore } from '@/store/useSettingsStore';
+import type { CumulativeImpact, TrekSession } from '@/types/session';
+import { bandForCelsius } from '@/utils/heatBand';
+import {
+  formatDistanceMiles,
+  formatDurationCompact,
+  formatTemp,
+  unitSuffix,
+} from '@/utils/units';
+
+function ImpactCard({
+  label,
+  value,
+  hot = false,
+  divider = false,
+}: {
+  label: string;
+  value: string;
+  hot?: boolean;
+  divider?: boolean;
+}) {
+  return (
+    <View style={[styles.impactCard, divider && styles.impactDivider]}>
+      <Text style={styles.impactLabel}>{label}</Text>
+      <Text style={[styles.impactValue, hot && styles.impactValueHot]}>{value}</Text>
+    </View>
+  );
+}
+
+function SessionRow({ session, onExport }: { session: TrekSession; onExport: () => void }) {
+  const unit = useSettingsStore(selectTemperatureUnit);
+  const band = bandForCelsius(session.avgTempC);
+  const durationSeconds =
+    session.endedAtUtc === null
+      ? 0
+      : Math.floor((session.endedAtUtc - session.startedAtUtc) / 1000);
+  const date = new Date(session.startedAtUtc);
+  const dateLabel = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  return (
+    <View style={styles.row}>
+      <View style={styles.rowMeta}>
+        <Text style={styles.rowTitle} numberOfLines={1}>
+          {session.name}
+        </Text>
+        <View style={styles.rowStats}>
+          <Text style={styles.rowStat}>{dateLabel}</Text>
+          <Text style={styles.rowStat}>{formatDurationCompact(durationSeconds)}</Text>
+          <View style={styles.rowAvg}>
+            <PillDot color={band?.color ?? COLORS.muted} />
+            <Text style={styles.rowStat}>
+              {formatTemp(session.avgTempC, unit)}
+              {unitSuffix(unit)}
+            </Text>
+          </View>
+          {session.endedAtUtc === null ? (
+            <Text style={styles.rowUnfinished}>UNFINISHED</Text>
+          ) : null}
+        </View>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Download interoperable CSV"
+        onPress={onExport}
+        style={styles.download}
+      >
+        <Text style={styles.downloadGlyph}>↓</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+export function ProfileImpactScreen() {
+  const email = useAuthStore(selectAuthEmail);
+  const [impact, setImpact] = useState<CumulativeImpact | null>(null);
+  const [sessions, setSessions] = useState<TrekSession[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    setImpact(getCumulativeImpact());
+    setSessions(listSessions());
+  }, []);
+
+  useEffect(() => refresh(), [refresh]);
+
+  return (
+    <View style={styles.screen}>
+      <PortalHeader
+        title="URBAN HEAT OPERATOR PORTAL"
+        subtitle={
+          email !== null
+            ? `Operator: ${email}`
+            : 'Organization: West Atlanta Watershed Alliance'
+        }
+      />
+
+      <View style={styles.impactPanel}>
+        <ImpactCard
+          label="Total Mapped"
+          value={`${formatDistanceMiles(impact?.totalDistanceMeters ?? 0, 1)} mi`}
+        />
+        <ImpactCard label="Expeditions" value={`${impact?.expeditionCount ?? 0}`} divider />
+        <ImpactCard
+          label="UHI Hotspots"
+          value={`${impact?.hotspotCount ?? 0} 🚨`}
+          hot
+          divider
+        />
+      </View>
+
+      <ScrollView style={styles.feed} contentContainerStyle={styles.feedContent}>
+        {sessions.length === 0 ? (
+          <View style={styles.empty}>
+            <LabelXS>No expeditions recorded</LabelXS>
+            <Text style={styles.emptyText}>
+              Completed transects appear here with their cumulative impact.
+            </Text>
+          </View>
+        ) : (
+          sessions.map((session) => (
+            <SessionRow
+              key={session.id}
+              session={session}
+              onExport={() =>
+                setNotice(
+                  'CSV export is not implemented in Sprint 1 — no column spec or target format is defined yet (G-10).'
+                )
+              }
+            />
+          ))
+        )}
+        {notice !== null ? <Text style={styles.notice}>{notice}</Text> : null}
+      </ScrollView>
+
+      <TabBar active="profile" />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: COLORS.bg },
+  impactPanel: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    backgroundColor: COLORS.surface,
+  },
+  impactCard: { flex: 1, paddingVertical: 12, paddingHorizontal: SPACE.s1, alignItems: 'center' },
+  impactDivider: { borderLeftWidth: 1, borderLeftColor: COLORS.border },
+  impactLabel: {
+    fontSize: 8,
+    textTransform: 'uppercase',
+    color: COLORS.muted,
+    letterSpacing: 1,
+    fontWeight: '600',
+  },
+  impactValue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginTop: 2,
+    fontVariant: TABULAR_NUMS,
+  },
+  impactValueHot: { color: HEAT.danger },
+  feed: { flex: 1 },
+  feedContent: { padding: SPACE.s2, gap: SPACE.s1 },
+  row: {
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    padding: SPACE.s2,
+    backgroundColor: COLORS.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: SPACE.s2,
+  },
+  rowMeta: { gap: 4, flexShrink: 1, flex: 1 },
+  rowTitle: { fontSize: 11, fontWeight: '600', color: COLORS.text },
+  rowStats: { flexDirection: 'row', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  rowStat: { fontSize: 9.5, color: COLORS.muted, fontVariant: TABULAR_NUMS },
+  rowAvg: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  rowUnfinished: { fontSize: 8, color: HEAT.crit, fontWeight: '800', letterSpacing: 0.5 },
+  download: {
+    width: 34,
+    height: 34,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  downloadGlyph: { fontSize: 14, color: COLORS.text },
+  empty: { padding: SPACE.s3, gap: SPACE.s1, alignItems: 'center' },
+  emptyText: { fontSize: 10, color: COLORS.muted, textAlign: 'center', lineHeight: 15 },
+  notice: { fontSize: 9.5, color: HEAT.crit, lineHeight: 14, paddingTop: SPACE.s1 },
+});

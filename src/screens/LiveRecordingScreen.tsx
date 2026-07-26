@@ -19,8 +19,9 @@
 
 import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
-import MapView, { PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
+import { Polyline } from 'react-native-maps';
 import { Hud } from '@/components/HudQuadrant';
+import { MapCanvas, isMapAvailable } from '@/components/MapCanvas';
 import { SlideToEndTrek } from '@/components/SlideToEndTrek';
 import { StatusPill } from '@/components/StatusPill';
 import { COLORS } from '@/config/theme';
@@ -84,20 +85,22 @@ function HeatTrail() {
 }
 
 export function LiveRecordingScreen({ onEnd }: { onEnd: () => void }) {
+  // Vertex count for the no-map fallback caption, so the operator still sees the
+  // trail accumulating without tiles. Reads the DECIMATED polyline store (0.2 Hz)
+  // and returns a primitive — this does NOT subscribe the screen to the 1 Hz stream.
+  const vertexCount = usePolylineStore((s) => s.vertices.length);
+
   return (
     <View style={styles.screen}>
       <View style={styles.mapWrap}>
-        <MapView
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFill}
+        <MapCanvas
           initialRegion={FALLBACK_REGION}
           showsUserLocation
           followsUserLocation
-          showsMyLocationButton={false}
-          toolbarEnabled={false}
+          fallbackCaption={`Trail: ${vertexCount} vertices logged`}
         >
-          <HeatTrail />
-        </MapView>
+          {isMapAvailable() ? <HeatTrail /> : null}
+        </MapCanvas>
 
         <StatusPill gpsLabel="High" />
       </View>

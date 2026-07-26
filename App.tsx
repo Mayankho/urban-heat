@@ -11,7 +11,11 @@
 import '@/services/backgroundLocationTask';
 
 import { useEffect, useState } from 'react';
-import { SafeAreaView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { StatusBar, StyleSheet, Text, View } from 'react-native';
+// SDK 57 ships edgeToEdgeEnabled=true, and React Native's own SafeAreaView applies
+// NO insets on Android — content would render under the status and navigation bars.
+// react-native-safe-area-context provides the real Android insets.
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS } from '@/config/theme';
 import { initializeDatabase } from '@/database/db';
 import { findUnfinishedSession } from '@/database/sessionsRepo';
@@ -29,7 +33,7 @@ import { SettingsDiagnosticsScreen } from '@/screens/SettingsDiagnosticsScreen';
 import { ValidationScreen } from '@/screens/ValidationScreen';
 import { WelcomeAuthScreen } from '@/screens/WelcomeAuthScreen';
 
-export default function App() {
+function AppContent() {
   const screen = useNavigationStore(selectScreen);
   const navigate = useNavigationStore((s) => s.navigate);
   const restoreSession = useAuthStore((s) => s.restoreSession);
@@ -113,6 +117,18 @@ export default function App() {
       {screen === 'profile' ? <ProfileImpactScreen /> : null}
       {screen === 'settings' ? <SettingsDiagnosticsScreen /> : null}
     </SafeAreaView>
+  );
+}
+
+/**
+ * SafeAreaProvider must sit above every consumer of SafeAreaView, so it wraps
+ * AppContent rather than living inside it.
+ */
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
   );
 }
 

@@ -52,15 +52,56 @@ const { withAndroidManifest } = require('expo/config-plugins');
 /** expo-location namespace + relative service class. */
 const LOCATION_SERVICE_FQCN = 'expo.modules.location.services.LocationTaskService';
 
-/** Both restricted capabilities this one service actually uses. */
-const REQUIRED_TYPES = 'location|connectedDevice';
+/**
+ * ============================================================================
+ *  ⚠️  CORRECTED 2026-07-26 AFTER AN ON-DEVICE CRASH. DO NOT ADD connectedDevice.
+ * ============================================================================
+ *
+ * IMPLEMENTATION_PLAN.md §6.3 originally specified `location|connectedDevice`,
+ * reasoning that the service genuinely does both GPS and BLE and that declaring
+ * both was "more truthful". THAT DECISION WAS WRONG, and it crashed the app on
+ * Android 16 / targetSDK 36 the first time an expedition was started:
+ *
+ *   java.lang.SecurityException: Starting FGS with type connectedDevice
+ *     ... requires permissions:
+ *     all of  [android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE]
+ *     any of  [BLUETOOTH_ADVERTISE, BLUETOOTH_CONNECT, BLUETOOTH_SCAN,
+ *              CHANGE_NETWORK_STATE, CHANGE_WIFI_STATE, NFC, UWB_RANGING, ...]
+ *   at expo.modules.location.services.LocationTaskService.startForeground
+ *
+ * WHY: expo-location calls the two-argument `startForeground(id, notification)`,
+ * so Android applies EVERY type declared for that service in the manifest. The
+ * `connectedDevice` type then demands at least one of those "any of" permissions
+ * be GRANTED AT RUNTIME. BLUETOOTH_CONNECT / BLUETOOTH_SCAN are runtime
+ * permissions, so the service becomes unstartable whenever they are not granted:
+ *
+ *   • simulator mode, which never asks for Bluetooth at all
+ *   • a volunteer who grants location but declines Bluetooth
+ *   • any GPS-only transect walked without the sensor
+ *
+ * In other words: a foreground service's declared types must match capabilities
+ * you can PROVE at start time, not capabilities you might use.
+ *
+ * THE FIX: declare `location` only. Background BLE continues to work — the GATT
+ * connection is held by the app process, which the location foreground service
+ * keeps resident (see IMPLEMENTATION_PLAN.md §5.3 R-02). This is what BLE+GPS
+ * apps do in practice.
+ *
+ * IF Android ever demands an explicit `connectedDevice` declaration for held GATT
+ * connections, the correct answer is a SEPARATE service for BLE that is started
+ * only once Bluetooth permissions are actually granted — never widening this one.
+ */
+const REQUIRED_TYPES = 'location';
 
 const TOOLS_NS = 'http://schemas.android.com/tools';
 
 const REQUIRED_PERMISSIONS = [
   'android.permission.FOREGROUND_SERVICE',
   'android.permission.FOREGROUND_SERVICE_LOCATION',
-  'android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE',
+  // NOTE: FOREGROUND_SERVICE_CONNECTED_DEVICE is deliberately NOT declared —
+  // see the REQUIRED_TYPES comment above. Declaring it is harmless on its own,
+  // but keeping it out makes it obvious that this app runs a location-typed
+  // service only, and stops anyone "helpfully" re-adding the type.
   'android.permission.BLUETOOTH_SCAN',
   'android.permission.BLUETOOTH_CONNECT',
   'android.permission.ACCESS_FINE_LOCATION',
@@ -160,6 +201,41 @@ function overrideForegroundService(manifest) {
   );
 }
 
+/**
+ * Guarantee a `com.google.android.geo.API_KEY` meta-data element exists.
+ *
+ * VERIFIED ON DEVICE: react-native-maps throws a FATAL JS error when the element
+ * is absent entirely — "API key not found. Check that <meta-data
+ * android:name="com.google.android.geo.API_KEY" ... is in the <application>
+ * element" — which takes down Screens 2.0 and 2.1.
+ *
+ * Expo's own `android.config.googleMaps.apiKey` plugin does NOT emit the element
+ * when the key is an empty string, so an unconfigured project has no element at
+ * all. Emitting it with an empty value makes the Maps SDK report an auth failure
+ * (grey tiles) instead of crashing.
+ *
+ * src/components/MapCanvas.tsx is the primary defence — it never mounts a MapView
+ * without a key. This is the second layer, for any MapView added later.
+ */
+function ensureMapsApiKeyMetadata(manifest) {
+  const application =
+    manifest.application?.find((a) => a?.$?.['android:name'] === '.MainApplication') ??
+    manifest.application?.[0];
+  if (!application) return;
+
+  application['meta-data'] = application['meta-data'] ?? [];
+  const list = application['meta-data'];
+  const NAME = 'com.google.android.geo.API_KEY';
+
+  if (list.some((m) => m?.$?.['android:name'] === NAME)) return; // real key already set
+
+  list.push({ $: { 'android:name': NAME, 'android:value': '' } });
+  console.log(
+    '[withUrbanHeatForegroundService] No Google Maps key configured — emitted an ' +
+      'empty geo.API_KEY meta-data so react-native-maps degrades instead of crashing.'
+  );
+}
+
 module.exports = function withUrbanHeatForegroundService(config) {
   return withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults?.manifest;
@@ -174,7 +250,10 @@ module.exports = function withUrbanHeatForegroundService(config) {
 
     ensureToolsNamespace(manifest);
     ensurePermissions(manifest);
+    // Must run before ensureMapsApiKeyMetadata: it creates the <application>
+    // node if Expo's internal mods have not populated it yet.
     overrideForegroundService(manifest);
+    ensureMapsApiKeyMetadata(manifest);
 
     return cfg;
   });

@@ -9,7 +9,7 @@
 import Constants from 'expo-constants';
 import type { LocationSubscription } from 'expo-location';
 import { createSession, finalizeSession } from '@/database/sessionsRepo';
-import { useSessionStore } from '@/store/useSessionStore';
+import { defaultSessionName, useSessionStore } from '@/store/useSessionStore';
 import { useTelemetryStore } from '@/store/useTelemetryStore';
 import type { SensorTelemetryPacket } from '@/types/telemetry';
 import { newId } from '@/utils/id';
@@ -98,7 +98,9 @@ export async function startSession(options: StartSessionOptions): Promise<string
 
   createSession({
     id: sessionId,
-    name: `Transect ${new Date(startedAtUtc).toISOString()}`,
+    // Same helper the store uses, so a session the user never renames still reads
+    // sensibly in the Screen 3.2 feed.
+    name: defaultSessionName(startedAtUtc),
     campaignToken: options.campaignToken,
     privacy: 'public_muni',
     startedAtUtc,

@@ -27,9 +27,16 @@ interface SessionState {
   setDraftPrivacy: (privacy: PrivacyMode) => void;
 }
 
-/** Default session name, e.g. "Transect 2026-07-25 14:03". Replaced by the user
- *  on Screen 3.1, where the wireframe shows "Proctor Creek Sidewalk Run_01". */
-function defaultSessionName(startedAtUtc: number): string {
+/**
+ * Default session name, e.g. "Transect 2026-07-25 14:03". Replaced by the user on
+ * Screen 3.1, where the wireframe shows "Proctor Creek Sidewalk Run_01".
+ *
+ * Exported so sessionController uses the SAME name when it INSERTs the row. It
+ * previously wrote a raw `toISOString()` string, which surfaced in the Screen 3.2
+ * feed as "Transect 2026-07-26T22:33:59.211Z" for any session the user never got
+ * to rename — e.g. one interrupted by a crash.
+ */
+export function defaultSessionName(startedAtUtc: number): string {
   const d = new Date(startedAtUtc);
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `Transect ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;

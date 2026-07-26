@@ -7,8 +7,8 @@
 
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
 import { Card, LabelXS } from '@/components/atoms';
+import { MapCanvas } from '@/components/MapCanvas';
 import { StatusPill } from '@/components/StatusPill';
 import { TabBar } from '@/components/TabBar';
 import { COLORS, SPACE } from '@/config/theme';
@@ -54,13 +54,10 @@ export function LaunchpadScreen({ onStart }: { onStart: () => void }) {
   return (
     <View style={styles.screen}>
       <View style={styles.mapWrap}>
-        <MapView
-          provider={PROVIDER_GOOGLE}
-          style={StyleSheet.absoluteFill}
+        <MapCanvas
           region={region}
           showsUserLocation={hasFix}
-          showsMyLocationButton={false}
-          toolbarEnabled={false}
+          fallbackCaption="Sector Target · Proctor Creek Core Area"
         />
 
         <StatusPill

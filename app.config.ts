@@ -54,18 +54,26 @@ const config: ExpoConfig = {
       'ACCESS_BACKGROUND_LOCATION',
       'FOREGROUND_SERVICE',
       'FOREGROUND_SERVICE_LOCATION',
-      'FOREGROUND_SERVICE_CONNECTED_DEVICE',
+      // FOREGROUND_SERVICE_CONNECTED_DEVICE intentionally omitted — declaring the
+      // `connectedDevice` FGS type crashed the app on Android 16 with a
+      // SecurityException whenever Bluetooth runtime permissions were absent.
+      // See plugins/withUrbanHeatForegroundService.js for the full analysis.
       'BLUETOOTH_SCAN',
       'BLUETOOTH_CONNECT',
       'WAKE_LOCK',
     ],
 
-    // Spread conditionally rather than assigning `undefined`: an explicit
-    // undefined would violate exactOptionalPropertyTypes and, more importantly,
-    // would serialise an empty googleMaps block into the manifest.
-    ...(googleMapsApiKey !== ''
-      ? { config: { googleMaps: { apiKey: googleMapsApiKey } } }
-      : {}),
+    // ALWAYS emit the googleMaps meta-data, even with an empty key.
+    //
+    // VERIFIED ON DEVICE: react-native-maps throws a FATAL JS error — "API key
+    // not found. Check that <meta-data android:name="com.google.android.geo.
+    // API_KEY" ... is in the <application> element" — when the meta-data element
+    // is absent entirely. Emitting it with an empty value means the SDK finds the
+    // element and reports an auth failure instead of taking down the screen.
+    //
+    // src/components/MapCanvas.tsx is the primary defence (it skips MapView
+    // entirely without a key); this is the second layer.
+    config: { googleMaps: { apiKey: googleMapsApiKey } },
   },
 
   plugins: [

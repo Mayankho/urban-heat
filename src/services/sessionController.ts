@@ -11,9 +11,10 @@ import type { LocationSubscription } from 'expo-location';
 import { createSession, finalizeSession } from '@/database/sessionsRepo';
 import { defaultSessionName, useSessionStore } from '@/store/useSessionStore';
 import { useTelemetryStore } from '@/store/useTelemetryStore';
-import type { SensorTelemetryPacket } from '@/types/telemetry';
+import type { BleConnectionState, SensorTelemetryPacket } from '@/types/telemetry';
 import { newId } from '@/utils/id';
 import {
+  BleNotReadyError,
   getConnectedDeviceName,
   registerCallbacks,
   startSensorLink,
@@ -53,12 +54,33 @@ export function initializeTelemetryPipeline(): void {
   });
 }
 
+export interface ConnectSensorResult {
+  ok: boolean;
+  message?: string;
+  /**
+   * Set when the failure was a radio-level problem rather than "sensor not found",
+   * so Screen 1.3 can offer the right remedy (e.g. open Bluetooth settings) instead
+   * of a generic retry. See BleNotReadyError in bleAdapter.ts.
+   */
+  connectionState?: BleConnectionState;
+  /** False for terminal conditions such as a device with no BLE radio at all. */
+  recoverable?: boolean;
+}
+
 /** Connect to real hardware. Surfaces failure so Screen 1.3 can show it. */
-export async function connectSensor(): Promise<{ ok: boolean; message?: string }> {
+export async function connectSensor(): Promise<ConnectSensorResult> {
   try {
     await startSensorLink();
     return { ok: true };
   } catch (e) {
+    if (e instanceof BleNotReadyError) {
+      return {
+        ok: false,
+        message: e.message,
+        connectionState: e.connectionState,
+        recoverable: e.recoverable,
+      };
+    }
     return { ok: false, message: e instanceof Error ? e.message : 'BLE link failed.' };
   }
 }

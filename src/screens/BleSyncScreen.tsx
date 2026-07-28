@@ -27,7 +27,7 @@ import {
 import { COLORS, HEAT, SPACE } from '@/config/theme';
 import { POCKETLAB_DEVICE_NAME } from '@/config/bleConstants';
 import { connectSensor } from '@/services/sessionController';
-import { requestBlePermissions } from '@/services/permissionsService';
+import { openBluetoothSettings, requestBlePermissions } from '@/services/permissionsService';
 import { useNavigationStore } from '@/store/useNavigationStore';
 import { selectConnection, useTelemetryStore } from '@/store/useTelemetryStore';
 
@@ -40,9 +40,13 @@ export function BleSyncScreen({
   const connection = useTelemetryStore(selectConnection);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** True when the failure was specifically a powered-off radio, which has its own
+   *  one-tap remedy rather than a generic "try again". */
+  const [radioOff, setRadioOff] = useState(false);
 
   const onConnectHardware = async () => {
     setBusy(true);
+    setRadioOff(false);
     setStatus('Requesting Bluetooth permissions…');
 
     const permission = await requestBlePermissions();
@@ -67,9 +71,13 @@ export function BleSyncScreen({
       setStatus('Linked. Telemetry subscription active.');
       onModeSelected('hardware');
       navigate('locationGate');
-    } else {
-      setStatus(result.message ?? 'Link failed.');
+      return;
     }
+
+    // The radio pre-flight reports its own accurate message (e.g. "Bluetooth is
+    // turned off") rather than letting a dead radio masquerade as a missing sensor.
+    setStatus(result.message ?? 'Link failed.');
+    setRadioOff(result.connectionState === 'bluetooth_off');
   };
 
   const onUseSimulator = () => {
@@ -116,6 +124,10 @@ export function BleSyncScreen({
         </View>
 
         {status !== null ? <Prompt>{status}</Prompt> : null}
+
+        {radioOff ? (
+          <SecondaryButton label="Open Bluetooth Settings" onPress={openBluetoothSettings} />
+        ) : null}
 
         <Spacer />
 

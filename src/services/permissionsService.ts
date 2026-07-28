@@ -129,6 +129,27 @@ export async function openAppSettings(): Promise<void> {
   await Linking.openSettings();
 }
 
+/**
+ * Deep link to the system Bluetooth settings page.
+ *
+ * Used when the radio pre-flight reports `bluetooth_off`. We deliberately do NOT
+ * call `BleManager.enable()` (which can switch the radio on programmatically on
+ * Android): silently toggling a user's radio is presumptuous, and on Android 13+ it
+ * shows its own system dialog anyway, so the deep link is both more honest and
+ * more predictable.
+ *
+ * Falls back to the app's own settings page if the intent cannot be resolved —
+ * some OEM skins rename or restrict the Bluetooth settings activity.
+ */
+export async function openBluetoothSettings(): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  try {
+    await Linking.sendIntent('android.settings.BLUETOOTH_SETTINGS');
+  } catch {
+    await Linking.openSettings();
+  }
+}
+
 export interface FullPermissionState {
   ble: boolean;
   foregroundLocation: boolean;

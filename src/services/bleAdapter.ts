@@ -287,14 +287,132 @@ export async function getBluetoothState(): Promise<BluetoothState> {
 }
 
 /**
+ * Raised when the radio itself is not usable, as distinct from "scan found nothing".
+ *
+ * Carries the BleConnectionState so the UI can render the right remediation, and a
+ * `recoverable` flag so we never invite the user to retry something that can never
+ * succeed (a device with no BLE radio at all).
+ */
+export class BleNotReadyError extends Error {
+  readonly connectionState: BleConnectionState;
+  readonly recoverable: boolean;
+
+  constructor(message: string, connectionState: BleConnectionState, recoverable: boolean) {
+    super(message);
+    this.name = 'BleNotReadyError';
+    this.connectionState = connectionState;
+    this.recoverable = recoverable;
+  }
+}
+
+/**
+ * Resolve the adapter's settled power state.
+ *
+ * `Resetting` and `Unknown` are transient — they occur while the stack is coming up,
+ * notably in the first moments after the app launches. Treating either as a hard
+ * failure would produce spurious "Bluetooth is off" errors, so we wait briefly for
+ * the adapter to settle before reporting.
+ */
+async function settledBluetoothState(waitMs: number): Promise<BluetoothState> {
+  const manager = getManager();
+  const isTransient = (s: BluetoothState) =>
+    s === BluetoothState.Resetting || s === BluetoothState.Unknown;
+
+  const immediate = await manager.state();
+  if (!isTransient(immediate)) return immediate;
+
+  return new Promise<BluetoothState>((resolve) => {
+    let done = false;
+    let subscription: Subscription | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const finish = (state: BluetoothState) => {
+      if (done) return;
+      done = true;
+      subscription?.remove();
+      if (timer !== null) clearTimeout(timer);
+      resolve(state);
+    };
+
+    timer = setTimeout(() => {
+      void manager.state().then(finish);
+    }, waitMs);
+
+    subscription = manager.onStateChange((state) => {
+      if (!isTransient(state)) finish(state);
+    }, false);
+  });
+}
+
+/**
+ * RADIO PRE-FLIGHT — call before any scan.
+ *
+ * WHY THIS EXISTS: without it, a phone with Bluetooth switched off runs the full
+ * 15 s scan timeout and then reports *"No device named 'PL GT M201' found — confirm
+ * the sensor is powered on"*. That sends a field volunteer hunting for a hardware
+ * fault that does not exist, and during the R-01 spike it would masquerade as
+ * evidence that BLE notifications are broken.
+ *
+ * Distinguishing "radio off" from "sensor absent" is the whole point: they have
+ * completely different remedies and completely different diagnostic meanings.
+ */
+export async function assertBluetoothReady(waitMs = 2500): Promise<void> {
+  const state = await settledBluetoothState(waitMs);
+
+  switch (state) {
+    case BluetoothState.PoweredOn:
+      return;
+
+    case BluetoothState.PoweredOff:
+      emitState('bluetooth_off');
+      throw new BleNotReadyError(
+        'Bluetooth is turned off. Switch it on, then link the sensor again.',
+        'bluetooth_off',
+        true
+      );
+
+    case BluetoothState.Unauthorized:
+      // Distinct from a denied runtime grant: the OS is refusing at adapter level.
+      emitState('unauthorized');
+      throw new BleNotReadyError(
+        'Urban Heat is not authorised to use Bluetooth. Enable Nearby devices for this app in system settings.',
+        'unauthorized',
+        true
+      );
+
+    case BluetoothState.Unsupported:
+      emitState('error');
+      throw new BleNotReadyError(
+        'This device has no Bluetooth Low Energy radio, so the hardware sensor cannot be used. Use simulator mode instead.',
+        'error',
+        false // no retry will ever help
+      );
+
+    default:
+      emitState('error');
+      throw new BleNotReadyError(
+        `Bluetooth adapter is not ready (state: ${state}). Wait a moment and try again.`,
+        'error',
+        true
+      );
+  }
+}
+
+/**
  * Scan for the PL GT M201 and resolve the first match.
  *
  * Filtering by NAME rather than by advertised service UUID is deliberate: many
  * peripherals (the Voyager included) do not advertise their full service list in
  * the advertisement packet, so a service-UUID scan filter can miss the device
  * entirely. docs/04 gives us an exact, verified device name — we use it.
+ *
+ * Runs the radio pre-flight FIRST, so "Bluetooth is off" is never reported as
+ * "sensor not found" after a pointless 15-second wait.
  */
-export function scanForSensor(timeoutMs = BLE_SCAN_TIMEOUT_MS): Promise<Device> {
+export async function scanForSensor(timeoutMs = BLE_SCAN_TIMEOUT_MS): Promise<Device> {
+  // Throws BleNotReadyError with an accurate, actionable message.
+  await assertBluetoothReady();
+
   const bleManager = getManager();
   emitState('scanning');
 

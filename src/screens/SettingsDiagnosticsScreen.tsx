@@ -23,6 +23,11 @@ import { COLORS, HEAT, SPACE } from '@/config/theme';
 import { UH_SAMPLE_RATE_HZ } from '@/config/bleConstants';
 import { flushLocalCache, getDatabaseSizeBytes, getTotalPointCount } from '@/database/db';
 import { isUsingUnverifiedDecoder } from '@/services/bleAdapter';
+import {
+  selectFrames,
+  selectTotalSeen,
+  useFrameSpikeStore,
+} from '@/store/useFrameSpikeStore';
 import { usePolylineStore } from '@/store/usePolylineStore';
 import {
   selectRssi,
@@ -62,6 +67,8 @@ export function SettingsDiagnosticsScreen() {
   const decodeFailures = useTelemetryStore(selectTotalDecodeFailures);
   const staleFixDrops = useTelemetryStore((s) => s.staleFixDrops);
   const resetPolyline = usePolylineStore((s) => s.reset);
+  const frames = useFrameSpikeStore(selectFrames);
+  const totalSeen = useFrameSpikeStore(selectTotalSeen);
 
   const [rows, setRows] = useState(0);
   const [sizeBytes, setSizeBytes] = useState(0);
@@ -133,6 +140,33 @@ export function SettingsDiagnosticsScreen() {
           </View>
         ) : null}
 
+        {/* G-01 capture. On screen rather than logcat-only so the layout can be
+            reverse-engineered with the phone untethered, standing at the sensor
+            with a thermometer. Remove once a verified decoder is installed. */}
+        <LabelXS style={styles.sectionSpacing}>Raw Frame Capture (G-01)</LabelXS>
+        <DiagnosticsCard>
+          {frames.length === 0 ? (
+            <Text style={styles.diagEmpty}>
+              No frames captured yet. Link the hardware sensor on the Telemetry
+              Array Link screen; frames appear here as they arrive.
+            </Text>
+          ) : (
+            <>
+              <Text style={styles.frameHint}>
+                {totalSeen} frame{totalSeen === 1 ? '' : 's'} seen · newest first ·
+                note the true temperature alongside these bytes
+              </Text>
+              {frames.map((f) => (
+                <Text key={`${f.atUtcMs}-${f.hex}`} style={styles.frameLine} selectable>
+                  {`${f.byteLength}B `}
+                  <Text style={styles.frameHex}>{f.hex}</Text>
+                  {`  → ${f.decodedC === null ? '—' : `${f.decodedC.toFixed(2)}C`} (${f.decode})`}
+                </Text>
+              ))}
+            </>
+          )}
+        </DiagnosticsCard>
+
         <LabelXS style={styles.sectionSpacing}>Local Cache Management</LabelXS>
         <Pressable accessibilityRole="button" onPress={onFlush} style={styles.flushBtn}>
           <Text style={styles.flushText}>⚠️ Flush Local SQLite Cache</Text>
@@ -173,4 +207,13 @@ const styles = StyleSheet.create({
   },
   warningTitle: { fontSize: 10, fontWeight: '800', color: HEAT.crit, letterSpacing: 0.5 },
   warningBody: { fontSize: 10, color: COLORS.muted, lineHeight: 15 },
+  diagEmpty: { fontSize: 10, color: COLORS.muted, lineHeight: 15 },
+  frameHint: { fontSize: 9, color: COLORS.muted, lineHeight: 13, marginBottom: 6 },
+  frameLine: {
+    fontFamily: 'monospace',
+    fontSize: 9.5,
+    color: COLORS.muted,
+    lineHeight: 15,
+  },
+  frameHex: { color: COLORS.text, fontWeight: '700' },
 });

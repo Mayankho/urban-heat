@@ -9,6 +9,7 @@
 import Constants from 'expo-constants';
 import type { LocationSubscription } from 'expo-location';
 import { createSession, finalizeSession } from '@/database/sessionsRepo';
+import { useFrameSpikeStore } from '@/store/useFrameSpikeStore';
 import { defaultSessionName, useSessionStore } from '@/store/useSessionStore';
 import { useTelemetryStore } from '@/store/useTelemetryStore';
 import type { BleConnectionState, SensorTelemetryPacket } from '@/types/telemetry';
@@ -45,7 +46,21 @@ const appVersion = Constants.expoConfig?.version ?? null;
  */
 export function initializeTelemetryPipeline(): void {
   registerCallbacks({
-    onPacket: (packet: SensorTelemetryPacket) => onTelemetryPacket(packet),
+    onPacket: (packet: SensorTelemetryPacket) => {
+      // G-01 spike capture. Done HERE rather than inside bleAdapter so the
+      // adapter keeps its single responsibility (bytes -> packet) and stays free
+      // of store imports. Bounded ring; see useFrameSpikeStore.
+      if (packet.rawHex !== undefined) {
+        useFrameSpikeStore.getState().push({
+          hex: packet.rawHex,
+          byteLength: packet.rawHex.length / 2,
+          decode: packet.decode,
+          decodedC: packet.ambientTempC,
+          atUtcMs: packet.receivedAtUtcMs,
+        });
+      }
+      onTelemetryPacket(packet);
+    },
     onStateChange: (state, deviceName) =>
       useTelemetryStore.getState().setConnection(state, deviceName),
     onError: (message) => {

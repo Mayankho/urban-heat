@@ -175,6 +175,18 @@ const UNVERIFIED_DECODER: FrameDecoder = (bytes) => {
 };
 
 /**
+ * G-01 SPIKE SWITCH — set true to log the raw hex of EVERY frame, not only the
+ * ones that fail to decode.
+ *
+ * Leave this ON only while reverse-engineering the PL GT M201 frame layout
+ * against a reference thermometer. Turn it OFF once a verified decoder is
+ * installed: at 1 Hz it is one console line per second, which is noise in normal
+ * use and a real cost in a long session. Has no effect in release builds — the
+ * call site is already inside an `__DEV__` guard.
+ */
+const SPIKE_LOG_EVERY_FRAME = true;
+
+/**
  * Swap this to a verified decoder once the PL GT M201 layout is confirmed.
  * Keeping it a single mutable binding means closing G-01 touches one line.
  */
@@ -236,14 +248,27 @@ export function decodeFrame(
     rssiDbm,
     source: 'PL_GT_M201',
     decode: result.status,
-    // __DEV__ ONLY. At 1 Hz, retaining a hex string per packet for a whole
-    // session is exactly the unbounded heap growth the Zero-RAM guardrail bans.
-    ...(__DEV__ ? { rawHex: bytesToHex(bytes) } : {}),
+    // Populated in __DEV__, and also in ANY build while the G-01 spike is on —
+    // a standalone release APK carried out to the sensor has no Metro and no
+    // logcat, so the bytes have to reach the UI to be useful.
+    //
+    // Still safe against the Zero-RAM guardrail: the packet is transient, and the
+    // only thing that RETAINS a frame is useFrameSpikeStore, which is hard-capped.
+    ...(__DEV__ || SPIKE_LOG_EVERY_FRAME ? { rawHex: bytesToHex(bytes) } : {}),
   };
 
-  if (__DEV__ && result.status !== 'ok') {
+  if (SPIKE_LOG_EVERY_FRAME || (__DEV__ && result.status !== 'ok')) {
+    // In spike mode we log EVERY frame, not just failures. Rationale: if the
+    // provisional decoder happens to accept a plausible-but-WRONG value we would
+    // otherwise see a believable number and no hex at all — the worst possible
+    // outcome, because it looks like success. Logging every frame lets the bytes
+    // be correlated against a reference thermometer, which is what actually
+    // closes G-01.
+    const decoded =
+      packet.ambientTempC === null ? '—' : `${packet.ambientTempC.toFixed(3)}C`;
     console.log(
-      `[bleAdapter] undecodable frame (${result.status}) len=${bytes.length} hex=${bytesToHex(bytes)}`
+      `[bleAdapter][G-01] status=${result.status} len=${bytes.length} ` +
+        `decoded=${decoded} hex=${bytesToHex(bytes)}`
     );
   }
 

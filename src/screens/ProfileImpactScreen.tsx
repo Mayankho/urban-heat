@@ -20,6 +20,7 @@ import { TabBar } from '@/components/TabBar';
 import { COLORS, HEAT, SPACE, TABULAR_NUMS } from '@/config/theme';
 import { getCumulativeImpact, listSessions } from '@/database/sessionsRepo';
 import { selectAuthEmail, useAuthStore } from '@/store/useAuthStore';
+import { useNavigationStore } from '@/store/useNavigationStore';
 import { selectTemperatureUnit, useSettingsStore } from '@/store/useSettingsStore';
 import type { CumulativeImpact, TrekSession } from '@/types/session';
 import { bandForCelsius } from '@/utils/heatBand';
@@ -93,6 +94,7 @@ function SessionRow({ session, onExport }: { session: TrekSession; onExport: () 
 }
 
 export function ProfileImpactScreen() {
+  const navigate = useNavigationStore((s) => s.navigate);
   const email = useAuthStore(selectAuthEmail);
   const [impact, setImpact] = useState<CumulativeImpact | null>(null);
   const [sessions, setSessions] = useState<TrekSession[]>([]);
@@ -129,6 +131,18 @@ export function ProfileImpactScreen() {
           divider
         />
       </View>
+
+      {/* Entry point to Screen 3.3. Wireframes 3.2 and 3.3 both show the Profile
+          tab active, so Diagnostics is reached from here — without this the whole
+          screen was unreachable in the running app. */}
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => navigate('settings')}
+        style={styles.settingsRow}
+      >
+        <Text style={styles.settingsLabel}>System Settings &amp; Diagnostics</Text>
+        <Text style={styles.settingsChevron}>›</Text>
+      </Pressable>
 
       <ScrollView style={styles.feed} contentContainerStyle={styles.feedContent}>
         {sessions.length === 0 ? (
@@ -212,6 +226,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   downloadGlyph: { fontSize: 14, color: COLORS.text },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: SPACE.s3,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  settingsLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: COLORS.text,
+  },
+  settingsChevron: { fontSize: 16, color: COLORS.muted },
   empty: { padding: SPACE.s3, gap: SPACE.s1, alignItems: 'center' },
   emptyText: { fontSize: 10, color: COLORS.muted, textAlign: 'center', lineHeight: 15 },
   notice: { fontSize: 9.5, color: HEAT.crit, lineHeight: 14, paddingTop: SPACE.s1 },

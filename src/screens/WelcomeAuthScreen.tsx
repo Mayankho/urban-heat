@@ -18,10 +18,10 @@ import {
 import { COLORS, HEAT, SPACE } from '@/config/theme';
 import { signInWithPassword } from '@/services/supabaseClient';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useNavigationStore } from '@/store/useNavigationStore';
+import { useNavigation } from '@react-navigation/native';
 
 export function WelcomeAuthScreen() {
-  const navigate = useNavigationStore((s) => s.navigate);
+  const navigation = useNavigation();
   const setSession = useAuthStore((s) => s.setSession);
   const isLocalOnly = useAuthStore((s) => s.isLocalOnlyBuild);
 
@@ -37,7 +37,7 @@ export function WelcomeAuthScreen() {
     setBusy(false);
     if (result.ok) {
       setSession(email.trim());
-      navigate('enrollment');
+      navigation.navigate('Enrollment');
     } else {
       setError(result.message);
     }
@@ -102,7 +102,7 @@ export function WelcomeAuthScreen() {
         {isLocalOnly ? (
           <SecondaryButton
             label="Continue in local-only mode"
-            onPress={() => navigate('enrollment')}
+            onPress={() => navigation.navigate('Enrollment')}
           />
         ) : null}
       </ScrollView>

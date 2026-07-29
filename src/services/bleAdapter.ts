@@ -99,17 +99,62 @@ function bytesToHex(bytes: Uint8Array): string {
 
 interface DecodeResult {
   status: DecodeStatus;
+  /** EXTERNAL probe — the scientifically meaningful channel. */
   ambientTempC: number | null;
+  /** Internal PCB temperature — diagnostics only, never persisted. */
+  internalTempC: number | null;
   humidityPct: number | null;
+}
+
+/**
+ * CHANNEL DISCRIMINATOR — which decoded slot is the external probe?
+ *
+ * Derived from the PocketLab reference export: across 68 samples the internal PCB
+ * channel spanned 0.1 °C while the external probe spanned 8.0 °C — an ~80x
+ * difference in spread. So given two candidate slots, the one that MOVES is the
+ * external probe and the flat one is the enclosure.
+ *
+ * A single frame cannot distinguish them; this needs a short history. The window
+ * is fixed-size, so it is Zero-RAM compliant — the guardrail bans unbounded
+ * growth, not a bounded ring of a few floats.
+ *
+ * This exists because the byte OFFSETS are still undocumented (G-01). Once real
+ * frames are captured and the layout is confirmed, slot assignment becomes static
+ * and this discriminator can be deleted.
+ */
+const DISCRIMINATOR_WINDOW = 24;
+const slotA: number[] = [];
+const slotB: number[] = [];
+
+function spread(xs: readonly number[]): number {
+  if (xs.length < 2) return 0;
+  return Math.max(...xs) - Math.min(...xs);
+}
+
+/** Feed two candidate readings; returns them ordered [external, internal]. */
+function discriminateChannels(a: number, b: number): [number, number] {
+  slotA.push(a);
+  slotB.push(b);
+  if (slotA.length > DISCRIMINATOR_WINDOW) slotA.shift();
+  if (slotB.length > DISCRIMINATOR_WINDOW) slotB.shift();
+
+  // Not enough history yet — fall back to declaration order.
+  if (slotA.length < 4) return [a, b];
+
+  return spread(slotA) >= spread(slotB) ? [a, b] : [b, a];
+}
+
+/** Reset the discriminator between sessions/devices. */
+export function resetChannelDiscriminator(): void {
+  slotA.length = 0;
+  slotB.length = 0;
 }
 
 type FrameDecoder = (bytes: Uint8Array) => DecodeResult;
 
-const REJECT: DecodeResult = {
-  status: 'unknown_frame_type',
-  ambientTempC: null,
-  humidityPct: null,
-};
+function fail(status: DecodeStatus): DecodeResult {
+  return { status, ambientTempC: null, internalTempC: null, humidityPct: null };
+}
 
 function isPlausibleTemp(c: number): boolean {
   return Number.isFinite(c) && c >= TEMP_PLAUSIBLE_MIN_C && c <= TEMP_PLAUSIBLE_MAX_C;
@@ -143,36 +188,60 @@ function isPlausibleHumidity(pct: number): boolean {
  * until the layout is confirmed.
  */
 const UNVERIFIED_DECODER: FrameDecoder = (bytes) => {
-  if (bytes.length === 0) {
-    return { status: 'length_mismatch', ambientTempC: null, humidityPct: null };
-  }
+  if (bytes.length === 0) return fail('length_mismatch');
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 
-  // A. float32 LE
-  if (bytes.length >= 4) {
-    const f = view.getFloat32(0, true);
-    if (isPlausibleTemp(f)) {
-      return { status: 'ok', ambientTempC: f, humidityPct: null };
-    }
-  }
+  /** Every plausible temperature this frame yields, in byte order. */
+  const candidates: number[] = [];
 
-  // B / C. int16 LE with candidate scale factors
-  if (bytes.length >= 2) {
-    const raw = view.getInt16(0, true);
-    for (const scale of [100, 128]) {
+  // Sweep the frame for values that decode to a plausible temperature under the
+  // conventional TI SensorTag-family encodings (the F000AAxx UUID space
+  // originates there). Collecting ALL of them — rather than returning the first —
+  // is what lets the two thermal channels be separated.
+  for (let off = 0; off + 4 <= bytes.length; off += 2) {
+    const f = view.getFloat32(off, true);
+    if (isPlausibleTemp(f)) candidates.push(f);
+  }
+  for (let off = 0; off + 2 <= bytes.length; off += 2) {
+    const raw = view.getInt16(off, true);
+    for (const scale of [100, 128, 10]) {
       const c = raw / scale;
       if (isPlausibleTemp(c)) {
-        return { status: 'ok', ambientTempC: c, humidityPct: null };
+        candidates.push(c);
+        break;
       }
     }
-    // A well-formed frame we simply cannot interpret is materially different
-    // from a garbage frame — surface it as out_of_range so the Screen 3.3
-    // diagnostics distinguish "wrong layout" from "corrupt radio".
-    return { status: 'out_of_range', ambientTempC: null, humidityPct: null };
   }
 
-  return REJECT;
+  if (candidates.length === 0) {
+    // A well-formed frame we simply cannot interpret is materially different from
+    // a garbage frame — surface it as out_of_range so Screen 3.3 distinguishes
+    // "wrong layout" from "corrupt radio".
+    return fail('out_of_range');
+  }
+
+  if (candidates.length === 1) {
+    // Only one thermal value visible. Treat it as the external probe, since that
+    // is the reading the product exists to record, and report no internal channel
+    // rather than inventing one.
+    return {
+      status: 'ok',
+      ambientTempC: candidates[0]!,
+      internalTempC: null,
+      humidityPct: null,
+    };
+  }
+
+  // Two or more: use the variance discriminator to decide which slot is the
+  // external probe. See discriminateChannels() for the reasoning.
+  const [external, internal] = discriminateChannels(candidates[0]!, candidates[1]!);
+  return {
+    status: 'ok',
+    ambientTempC: external,
+    internalTempC: internal,
+    humidityPct: null,
+  };
 };
 
 /**
@@ -221,6 +290,7 @@ export function decodeFrame(
     return {
       receivedAtUtcMs,
       ambientTempC: null,
+      internalTempC: null,
       humidityPct: null,
       heatIndexC: null,
       rssiDbm,
@@ -238,7 +308,10 @@ export function decodeFrame(
 
   const packet: SensorTelemetryPacket = {
     receivedAtUtcMs,
+    // EXTERNAL probe only. The internal PCB channel is carried alongside for
+    // diagnostics and is never persisted or charted.
     ambientTempC: result.status === 'ok' ? result.ambientTempC : null,
+    internalTempC: result.status === 'ok' ? result.internalTempC : null,
     humidityPct,
     // Derived here so the value the operator sees in the field is the value that
     // reaches the CSV. Returns null when humidity is absent — no fabricated RH.

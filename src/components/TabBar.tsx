@@ -1,37 +1,51 @@
 /**
  * Wireframe `.tabbar` — the three-tab bottom navigation (Track / Campaigns / Profile).
  *
- * Icons in the wireframe are inline SVGs. Rather than add react-native-svg for
- * three glyphs, these are text marks at the same visual weight — the icon set is
- * a cosmetic follow-up, not a Sprint 1 deliverable, and adding a dependency for
- * it would exceed the approved stack.
+ * Kept as a custom component rather than a React Navigation bottom-tab navigator:
+ * the wireframe's bar is a specific visual object (48px, structural top border, no
+ * elevation, 9px uppercase labels) and re-skinning the stock navigator to match
+ * would be more code than this, for no behavioural gain. It drives the same native
+ * stack, so history and the back button still work.
+ *
+ * Icons in the wireframe are inline SVGs; these are text marks at matching weight.
  */
 
+import { useNavigation, useNavigationState } from '@react-navigation/native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { COLORS, SPACE } from '@/config/theme';
-import { useNavigationStore, type ScreenId } from '@/store/useNavigationStore';
+import type { RootStackParamList } from '@/navigation/types';
 
 export type TabKey = 'track' | 'campaigns' | 'profile';
 
-const TABS: ReadonlyArray<{ key: TabKey; label: string; mark: string; screen: ScreenId }> = [
-  { key: 'track', label: 'Track', mark: '◈', screen: 'launchpad' },
-  { key: 'campaigns', label: 'Campaigns', mark: '◎', screen: 'enrollment' },
-  { key: 'profile', label: 'Profile', mark: '◍', screen: 'profile' },
+const TABS: ReadonlyArray<{
+  key: TabKey;
+  label: string;
+  mark: string;
+  route: keyof RootStackParamList;
+}> = [
+  { key: 'track', label: 'Track', mark: '◈', route: 'Launchpad' },
+  { key: 'campaigns', label: 'Campaigns', mark: '◎', route: 'Enrollment' },
+  { key: 'profile', label: 'Profile', mark: '◍', route: 'Profile' },
 ];
 
-export function TabBar({ active }: { active: TabKey }) {
-  const navigate = useNavigationStore((s) => s.navigate);
+export function TabBar({ active }: { active?: TabKey }) {
+  const navigation = useNavigation();
+  // Derive the active tab from the real route when the caller does not pin one,
+  // so the highlight cannot drift out of sync with the navigator.
+  const currentRoute = useNavigationState((s) => s.routes[s.index]?.name);
+  const derived = TABS.find((t) => t.route === currentRoute)?.key;
+  const activeKey = active ?? derived;
 
   return (
     <View style={styles.tabbar}>
       {TABS.map((tab) => {
-        const isActive = tab.key === active;
+        const isActive = tab.key === activeKey;
         return (
           <Pressable
             key={tab.key}
             accessibilityRole="tab"
             accessibilityState={{ selected: isActive }}
-            onPress={() => navigate(tab.screen)}
+            onPress={() => navigation.navigate(tab.route)}
             style={styles.tab}
           >
             <Text style={[styles.mark, isActive && styles.activeText]}>{tab.mark}</Text>

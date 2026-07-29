@@ -62,6 +62,11 @@ export function startSimulator(cb: SimulatorCallbacks): void {
     const packet: SensorTelemetryPacket = {
       receivedAtUtcMs: Date.now(),
       ambientTempC: tempC,
+      // Internal PCB channel, modelled on the real PocketLab export: that unit
+      // sat at 25.8–25.9 °C across 68 samples (0.1 °C total spread) while the
+      // external probe swung 8 °C. Simulating a near-flat internal channel keeps
+      // the two-channel plumbing and the variance discriminator exercised.
+      internalTempC: 25.85 + (tick % 3) * 0.05,
       humidityPct: SIM_HUMIDITY_PCT,
       heatIndexC: computeHeatIndexC(tempC, SIM_HUMIDITY_PCT),
       // Plausible indoor-desk RSSI, drifting slightly so the diagnostics panel

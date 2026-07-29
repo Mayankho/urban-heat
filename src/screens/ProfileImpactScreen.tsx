@@ -7,20 +7,21 @@
  * The UHI Hotspots figure uses the APPROVED G-06 definition: the sum of per-session
  * counters, each incremented once per 1 Hz sample at or above 95 °F.
  *
- * CSV export is NOT implemented this sprint (G-10 — it appears in the PRD core loop
- * and on this screen, but in no Sprint 1 task, and no column spec or target
- * consumer format exists). The control is present and reports that honestly rather
- * than silently doing nothing.
+ * CSV export (G-10) is now implemented — the per-row download control writes the
+ * session's trek_points to a file and opens the native share sheet. See
+ * services/csvExporter.ts for the column spec and the external-probe provenance
+ * note.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LabelXS, PillDot, PortalHeader } from '@/components/atoms';
 import { TabBar } from '@/components/TabBar';
 import { COLORS, HEAT, SPACE, TABULAR_NUMS } from '@/config/theme';
 import { getCumulativeImpact, listSessions } from '@/database/sessionsRepo';
 import { selectAuthEmail, useAuthStore } from '@/store/useAuthStore';
-import { useNavigationStore } from '@/store/useNavigationStore';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { exportSessionCsv } from '@/services/csvExporter';
 import { selectTemperatureUnit, useSettingsStore } from '@/store/useSettingsStore';
 import type { CumulativeImpact, TrekSession } from '@/types/session';
 import { bandForCelsius } from '@/utils/heatBand';
@@ -50,7 +51,15 @@ function ImpactCard({
   );
 }
 
-function SessionRow({ session, onExport }: { session: TrekSession; onExport: () => void }) {
+function SessionRow({
+  session,
+  onExport,
+  busy,
+}: {
+  session: TrekSession;
+  onExport: () => void;
+  busy: boolean;
+}) {
   const unit = useSettingsStore(selectTemperatureUnit);
   const band = bandForCelsius(session.avgTempC);
   const durationSeconds =
@@ -83,29 +92,50 @@ function SessionRow({ session, onExport }: { session: TrekSession; onExport: () 
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Download interoperable CSV"
+        accessibilityLabel={`Export ${session.name} as CSV`}
+        accessibilityState={{ busy }}
         onPress={onExport}
-        style={styles.download}
+        disabled={busy}
+        style={[styles.download, busy && styles.downloadBusy]}
       >
-        <Text style={styles.downloadGlyph}>↓</Text>
+        {busy ? (
+          <ActivityIndicator size="small" color={COLORS.text} />
+        ) : (
+          <Text style={styles.downloadGlyph}>↓</Text>
+        )}
       </Pressable>
     </View>
   );
 }
 
 export function ProfileImpactScreen() {
-  const navigate = useNavigationStore((s) => s.navigate);
+  const navigation = useNavigation();
   const email = useAuthStore(selectAuthEmail);
   const [impact, setImpact] = useState<CumulativeImpact | null>(null);
   const [sessions, setSessions] = useState<TrekSession[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setImpact(getCumulativeImpact());
     setSessions(listSessions());
   }, []);
 
-  useEffect(() => refresh(), [refresh]);
+  // Re-read on every focus so a session saved on Screen 3.1 appears immediately
+  // when the user navigates back here.
+  useFocusEffect(refresh);
+
+  const onExport = useCallback(async (sessionId: string) => {
+    setExportingId(sessionId);
+    setNotice(null);
+    const result = await exportSessionCsv(sessionId);
+    setExportingId(null);
+    setNotice(
+      result.ok
+        ? result.message ?? `Exported ${result.rowCount?.toLocaleString()} rows — ${result.fileName}`
+        : `Export failed: ${result.message ?? 'unknown error'}`
+    );
+  }, []);
 
   return (
     <View style={styles.screen}>
@@ -137,7 +167,7 @@ export function ProfileImpactScreen() {
           screen was unreachable in the running app. */}
       <Pressable
         accessibilityRole="button"
-        onPress={() => navigate('settings')}
+        onPress={() => navigation.navigate('Settings')}
         style={styles.settingsRow}
       >
         <Text style={styles.settingsLabel}>System Settings &amp; Diagnostics</Text>
@@ -157,11 +187,8 @@ export function ProfileImpactScreen() {
             <SessionRow
               key={session.id}
               session={session}
-              onExport={() =>
-                setNotice(
-                  'CSV export is not implemented in Sprint 1 — no column spec or target format is defined yet (G-10).'
-                )
-              }
+              busy={exportingId === session.id}
+              onExport={() => void onExport(session.id)}
             />
           ))
         )}
@@ -225,6 +252,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  downloadBusy: { opacity: 0.6 },
   downloadGlyph: { fontSize: 14, color: COLORS.text },
   settingsRow: {
     flexDirection: 'row',

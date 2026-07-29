@@ -12,18 +12,21 @@
  */
 
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   HeaderTitle,
   LabelXS,
   LabeledInput,
   PrimaryButton,
+  SecondaryButton,
   SegmentedToggle,
   Spacer,
 } from '@/components/atoms';
+import { TemperatureChart } from '@/components/TemperatureChart';
+import { exportSessionCsv } from '@/services/csvExporter';
 import { COLORS, HEAT, SPACE } from '@/config/theme';
 import { getSession, updateSessionMeta } from '@/database/sessionsRepo';
-import { useNavigationStore } from '@/store/useNavigationStore';
+import { useNavigation } from '@react-navigation/native';
 import { usePolylineStore } from '@/store/usePolylineStore';
 import { selectTemperatureUnit, useSettingsStore } from '@/store/useSettingsStore';
 import { useSessionStore } from '@/store/useSessionStore';
@@ -36,7 +39,7 @@ const PRIVACY_OPTIONS: ReadonlyArray<{ value: PrivacyMode; label: string }> = [
 ];
 
 export function ValidationScreen() {
-  const navigate = useNavigationStore((s) => s.navigate);
+  const navigation = useNavigation();
   const sessionId = useSessionStore((s) => s.activeSessionId);
   const draftName = useSessionStore((s) => s.draftName);
   const setDraftName = useSessionStore((s) => s.setDraftName);
@@ -46,6 +49,20 @@ export function ValidationScreen() {
   const resetPolyline = usePolylineStore((s) => s.reset);
 
   const [summary, setSummary] = useState<TrekSession | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
+
+  const onExportCsv = async () => {
+    if (sessionId === null || exporting) return;
+    setExporting(true);
+    const result = await exportSessionCsv(sessionId);
+    setExporting(false);
+    setExportNotice(
+      result.ok
+        ? result.message ?? `Exported ${result.rowCount?.toLocaleString()} rows — ${result.fileName}`
+        : `Export failed: ${result.message ?? 'unknown error'}`
+    );
+  };
 
   // Read the finalized row from disk — the durable record, not the live store.
   useEffect(() => {
@@ -57,12 +74,12 @@ export function ValidationScreen() {
     if (sessionId === null) return;
     updateSessionMeta(sessionId, draftName.trim() || 'Untitled Transect', draftPrivacy);
     resetPolyline();
-    navigate('profile');
+    navigation.navigate('Profile');
   };
 
   return (
     <View style={styles.screen}>
-      <View style={styles.pad}>
+      <ScrollView contentContainerStyle={styles.pad}>
         <HeaderTitle>Save Session</HeaderTitle>
 
         {/* .thumb — geospatial thumbnail placeholder. A static map snapshot is a
@@ -90,6 +107,10 @@ export function ValidationScreen() {
           )}
         </View>
 
+        {/* Heat profile for the trek just completed — X: elapsed, Y: external
+            probe. Read from SQLite, so it reflects the durable record. */}
+        {sessionId !== null ? <TemperatureChart sessionId={sessionId} /> : null}
+
         <LabeledInput
           label="Session Identifier"
           value={draftName}
@@ -110,18 +131,26 @@ export function ValidationScreen() {
         <Spacer />
 
         <PrimaryButton label="Upload Session Data Package" onPress={onSave} />
-        <Text style={styles.note}>
-          Saved locally to SQLite and queued for sync. Cloud upload lands in the
-          Supabase sprint.
-        </Text>
-      </View>
+        <SecondaryButton
+          label={exporting ? 'Exporting…' : 'Export CSV'}
+          onPress={() => void onExportCsv()}
+        />
+        {exportNotice !== null ? (
+          <Text style={styles.note}>{exportNotice}</Text>
+        ) : (
+          <Text style={styles.note}>
+            Saved locally to SQLite and queued for sync. Cloud upload lands in the
+            Supabase sprint.
+          </Text>
+        )}
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: COLORS.bg },
-  pad: { flex: 1, padding: SPACE.s3, gap: SPACE.s2 },
+  pad: { padding: SPACE.s3, gap: SPACE.s2, flexGrow: 1 },
   thumb: {
     height: 140,
     borderWidth: 1,

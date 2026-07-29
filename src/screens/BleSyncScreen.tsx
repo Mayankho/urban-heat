@@ -37,7 +37,8 @@ import { POCKETLAB_DEVICE_NAME } from '@/config/bleConstants';
 import { startDiscovery, stopDiscovery, type DiscoveredDevice } from '@/services/bleAdapter';
 import { connectSensorById } from '@/services/sessionController';
 import { openBluetoothSettings, requestBlePermissions } from '@/services/permissionsService';
-import { useNavigationStore } from '@/store/useNavigationStore';
+import { useNavigation } from '@react-navigation/native';
+import { useSessionStore } from '@/store/useSessionStore';
 import { selectConnection, useTelemetryStore } from '@/store/useTelemetryStore';
 
 /** Signal-strength label so the operator can tell which sensor is nearest. */
@@ -49,13 +50,12 @@ function signalLabel(dbm: number | null): string {
   return `${dbm} dBm · marginal`;
 }
 
-export function BleSyncScreen({
-  onModeSelected,
-}: {
-  onModeSelected: (mode: 'hardware' | 'simulator') => void;
-}) {
-  const navigate = useNavigationStore((s) => s.navigate);
+export function BleSyncScreen() {
+  const navigation = useNavigation();
   const connection = useTelemetryStore(selectConnection);
+  // Sensor mode lives in the store rather than being prop-drilled: React
+  // Navigation owns routing, Zustand owns state.
+  const setSensorMode = useSessionStore((s) => s.setSensorMode);
 
   const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -111,8 +111,8 @@ export function BleSyncScreen({
 
     if (result.ok) {
       setStatus(`Linked to "${target.name}". Telemetry subscription active.`);
-      onModeSelected('hardware');
-      navigate('locationGate');
+      setSensorMode('hardware');
+      navigation.navigate('LocationGate');
       return;
     }
     setStatus(result.message ?? 'Link failed.');
@@ -121,8 +121,8 @@ export function BleSyncScreen({
 
   const onUseSimulator = () => {
     stopDiscovery();
-    onModeSelected('simulator');
-    navigate('locationGate');
+    setSensorMode('simulator');
+    navigation.navigate('LocationGate');
   };
 
   const linked = connection === 'subscribed' || connection === 'connected';

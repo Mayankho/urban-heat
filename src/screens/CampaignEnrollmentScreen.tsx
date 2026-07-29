@@ -23,23 +23,23 @@ import {
   Spacer,
 } from '@/components/atoms';
 import { COLORS, SPACE } from '@/config/theme';
-import { useNavigationStore } from '@/store/useNavigationStore';
+import { useNavigation } from '@react-navigation/native';
 import { useSessionStore } from '@/store/useSessionStore';
 
 export function CampaignEnrollmentScreen() {
-  const navigate = useNavigationStore((s) => s.navigate);
+  const navigation = useNavigation();
   const setCampaignToken = useSessionStore((s) => s.setCampaignToken);
   const [token, setToken] = useState('');
 
   const onValidate = () => {
     const trimmed = token.trim().toUpperCase();
     setCampaignToken(trimmed.length > 0 ? trimmed : null);
-    navigate('bleSync');
+    navigation.navigate('BleSync');
   };
 
   const onSkip = () => {
     setCampaignToken(null);
-    navigate('bleSync');
+    navigation.navigate('BleSync');
   };
 
   return (
@@ -61,9 +61,9 @@ export function CampaignEnrollmentScreen() {
           mono
         />
 
-        <PrimaryButton label="Validate Campaign" onPress={onValidate} />
+        <PrimaryButton label="Join Group" onPress={onValidate} />
         <Spacer />
-        <SecondaryButton label="Skip to Public Muni Layer" onPress={onSkip} />
+        <SecondaryButton label="Go Solo" onPress={onSkip} />
       </View>
     </View>
   );

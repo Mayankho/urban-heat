@@ -30,6 +30,8 @@ import {
 } from '@/store/useFrameSpikeStore';
 import { usePolylineStore } from '@/store/usePolylineStore';
 import {
+  selectCurrentInternalTempC,
+  selectCurrentTempC,
   selectRssi,
   selectTotalDecodeFailures,
   useTelemetryStore,
@@ -69,6 +71,8 @@ export function SettingsDiagnosticsScreen() {
   const resetPolyline = usePolylineStore((s) => s.reset);
   const frames = useFrameSpikeStore(selectFrames);
   const totalSeen = useFrameSpikeStore(selectTotalSeen);
+  const externalC = useTelemetryStore(selectCurrentTempC);
+  const internalC = useTelemetryStore(selectCurrentInternalTempC);
 
   const [rows, setRows] = useState(0);
   const [sizeBytes, setSizeBytes] = useState(0);
@@ -124,6 +128,18 @@ export function SettingsDiagnosticsScreen() {
           />
           <DiagnosticsRow label="Dropped Frames" value={`${decodeFailures}`} />
           <DiagnosticsRow label="Stale GPS Drops" value={`${staleFixDrops}`} />
+          {/* Both thermal channels, so an operator can confirm they are being
+              separated correctly: the internal PCB reading should sit near room
+              temperature and barely move, while the external probe tracks the
+              environment. Only the external one is ever recorded. */}
+          <DiagnosticsRow
+            label="External Probe (recorded)"
+            value={externalC === null ? '—' : `${externalC.toFixed(2)} °C`}
+          />
+          <DiagnosticsRow
+            label="Internal PCB (diagnostic)"
+            value={internalC === null ? '—' : `${internalC.toFixed(2)} °C`}
+          />
         </DiagnosticsCard>
 
         {/* Honest provenance warning — the operator must know readings are not

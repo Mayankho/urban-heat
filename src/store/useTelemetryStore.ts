@@ -38,8 +38,17 @@ import { isHotspotSample } from '@/utils/heatBand';
 
 interface TelemetryState {
   // ---- Live sensor values (the 1 Hz hot fields) ----
-  /** Latest ambient temperature, CELSIUS. null before the first packet. */
+  /**
+   * Latest EXTERNAL PROBE temperature, CELSIUS. null before the first packet.
+   * This is the reading the HUD renders, the DB stores, and the CSV exports.
+   */
   currentTempC: number | null;
+  /**
+   * Latest INTERNAL PCB temperature, CELSIUS — diagnostics only.
+   * Surfaced on Screen 3.3 so an operator can confirm the channels are being
+   * separated correctly; never persisted, charted, or exported.
+   */
+  currentInternalTempC: number | null;
   currentHumidityPct: number | null;
   currentHeatIndexC: number | null;
   rssiDbm: number | null;
@@ -94,6 +103,7 @@ const ZERO_FAILURES: Record<Exclude<DecodeStatus, 'ok'>, number> = {
 
 export const useTelemetryStore = create<TelemetryState>((set) => ({
   currentTempC: null,
+  currentInternalTempC: null,
   currentHumidityPct: null,
   currentHeatIndexC: null,
   rssiDbm: null,
@@ -127,6 +137,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
 
       return {
         currentTempC: temp,
+        currentInternalTempC: packet.internalTempC,
         currentHumidityPct: packet.humidityPct,
         currentHeatIndexC: packet.heatIndexC,
         rssiDbm: packet.rssiDbm ?? s.rssiDbm,
@@ -167,6 +178,7 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
   resetSession: () =>
     set({
       currentTempC: null,
+      currentInternalTempC: null,
       currentHumidityPct: null,
       currentHeatIndexC: null,
       lastPacketAtMs: null,
@@ -194,6 +206,21 @@ export const useTelemetryStore = create<TelemetryState>((set) => ({
  * else — not the map, not the polyline, not the slider, not the parent screen.
  */
 export const selectCurrentTempC = (s: TelemetryState) => s.currentTempC;
+/** Internal PCB channel — Screen 3.3 diagnostics only. */
+export const selectCurrentInternalTempC = (s: TelemetryState) => s.currentInternalTempC;
+
+/**
+ * True when the sensor link is live AND packets are actually arriving.
+ *
+ * Deliberately stricter than `connection === 'subscribed'`: a subscription can
+ * attach to a characteristic that never fires, which would show "Connected" over
+ * a dead stream. Requiring a recent packet means the indicator reflects data
+ * flowing, not merely a socket being open.
+ */
+export const selectIsStreaming = (s: TelemetryState): boolean =>
+  s.connection === 'subscribed' &&
+  s.lastPacketAtMs !== null &&
+  Date.now() - s.lastPacketAtMs < 5000;
 export const selectCurrentHumidity = (s: TelemetryState) => s.currentHumidityPct;
 export const selectCurrentHeatIndexC = (s: TelemetryState) => s.currentHeatIndexC;
 export const selectRssi = (s: TelemetryState) => s.rssiDbm;

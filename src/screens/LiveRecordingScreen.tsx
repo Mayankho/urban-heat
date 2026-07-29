@@ -20,6 +20,10 @@
 import { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Polyline } from 'react-native-maps';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '@/navigation/types';
+import { endSession } from '@/services/sessionController';
 import { Hud } from '@/components/HudQuadrant';
 import { MapCanvas, isMapAvailable } from '@/components/MapCanvas';
 import { SlideToEndTrek } from '@/components/SlideToEndTrek';
@@ -84,7 +88,19 @@ function HeatTrail() {
   );
 }
 
-export function LiveRecordingScreen({ onEnd }: { onEnd: () => void }) {
+export function LiveRecordingScreen() {
+  // Typed native-stack prop rather than the generic one: replace() is a
+  // stack-specific action and is not on the base NavigationProp.
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
+  const onEnd = async () => {
+    await endSession();
+    // replace(), not navigate(): the trek is over, so the Live screen must not
+    // remain on the back stack where a stray back gesture could return to a HUD
+    // that is no longer recording anything.
+    navigation.replace('Validation');
+  };
+
   // Vertex count for the no-map fallback caption, so the operator still sees the
   // trail accumulating without tiles. Reads the DECIMATED polyline store (0.2 Hz)
   // and returns a primitive — this does NOT subscribe the screen to the 1 Hz stream.

@@ -8,10 +8,19 @@
 import { create } from 'zustand';
 import type { PrivacyMode } from '@/types/session';
 
+/** Where telemetry comes from for the next session. */
+export type SensorMode = 'hardware' | 'simulator';
+
 interface SessionState {
   /** UUID of the active session, or null when not recording. */
   activeSessionId: string | null;
   isRecording: boolean;
+  /**
+   * Chosen on Screen 1.3. Lives here rather than as a prop so screens do not
+   * prop-drill through the navigator — React Navigation owns routing, the store
+   * owns state.
+   */
+  sensorMode: SensorMode;
   startedAtUtc: number | null;
   /** Screen 1.2 org verification token, e.g. "WAWA-PROCTOR". Null for the
    *  "Skip to Public Muni Layer" path. */
@@ -22,6 +31,7 @@ interface SessionState {
 
   beginSession: (id: string, startedAtUtc: number, campaignToken: string | null) => void;
   endSession: () => void;
+  setSensorMode: (mode: SensorMode) => void;
   setCampaignToken: (token: string | null) => void;
   setDraftName: (name: string) => void;
   setDraftPrivacy: (privacy: PrivacyMode) => void;
@@ -45,6 +55,7 @@ export function defaultSessionName(startedAtUtc: number): string {
 export const useSessionStore = create<SessionState>((set, get) => ({
   activeSessionId: null,
   isRecording: false,
+  sensorMode: 'simulator',
   startedAtUtc: null,
   campaignToken: null,
   draftName: '',
@@ -64,6 +75,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
    *  to rename, set privacy, and upload the session that just finished. */
   endSession: () => set({ isRecording: false }),
 
+  setSensorMode: (mode) => set({ sensorMode: mode }),
   setCampaignToken: (token) => set({ campaignToken: token }),
   setDraftName: (name) => set({ draftName: name }),
   setDraftPrivacy: (privacy) => set({ draftPrivacy: privacy }),

@@ -31,10 +31,10 @@ import {
   requestBackgroundLocation,
   requestForegroundLocation,
 } from '@/services/permissionsService';
-import { useNavigationStore } from '@/store/useNavigationStore';
+import { useNavigation } from '@react-navigation/native';
 
 export function LocationGateScreen() {
-  const navigate = useNavigationStore((s) => s.navigate);
+  const navigation = useNavigation();
   const [granted, setGranted] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -133,9 +133,9 @@ export function LocationGateScreen() {
 
         {/* The hard gate: locked until ACCESS_BACKGROUND_LOCATION reads granted. */}
         <PrimaryButton
-          label="Proceed to App Launchpad"
+          label="Proceed to Trek"
           locked={!granted}
-          onPress={() => navigate('launchpad')}
+          onPress={() => navigation.navigate('Launchpad')}
         />
       </View>
     </View>

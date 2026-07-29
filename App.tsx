@@ -12,36 +12,19 @@ import '@/services/backgroundLocationTask';
 
 import { useEffect, useState } from 'react';
 import { StatusBar, StyleSheet, Text, View } from 'react-native';
-// SDK 57 ships edgeToEdgeEnabled=true, and React Native's own SafeAreaView applies
-// NO insets on Android — content would render under the status and navigation bars.
-// react-native-safe-area-context provides the real Android insets.
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS } from '@/config/theme';
 import { initializeDatabase } from '@/database/db';
 import { findUnfinishedSession } from '@/database/sessionsRepo';
-import { endSession, initializeTelemetryPipeline, startSession, type SensorMode } from '@/services/sessionController';
+import { RootNavigator } from '@/navigation/RootNavigator';
+import { initializeTelemetryPipeline } from '@/services/sessionController';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useNavigationStore, selectScreen } from '@/store/useNavigationStore';
-import { useSessionStore } from '@/store/useSessionStore';
-import { BleSyncScreen } from '@/screens/BleSyncScreen';
-import { CampaignEnrollmentScreen } from '@/screens/CampaignEnrollmentScreen';
-import { LaunchpadScreen } from '@/screens/LaunchpadScreen';
-import { LiveRecordingScreen } from '@/screens/LiveRecordingScreen';
-import { LocationGateScreen } from '@/screens/LocationGateScreen';
-import { ProfileImpactScreen } from '@/screens/ProfileImpactScreen';
-import { SettingsDiagnosticsScreen } from '@/screens/SettingsDiagnosticsScreen';
-import { ValidationScreen } from '@/screens/ValidationScreen';
-import { WelcomeAuthScreen } from '@/screens/WelcomeAuthScreen';
 
 function AppContent() {
-  const screen = useNavigationStore(selectScreen);
-  const navigate = useNavigationStore((s) => s.navigate);
   const restoreSession = useAuthStore((s) => s.restoreSession);
-  const campaignToken = useSessionStore((s) => s.campaignToken);
 
   const [ready, setReady] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [sensorMode, setSensorMode] = useState<SensorMode>('simulator');
 
   useEffect(() => {
     void (async () => {
@@ -72,16 +55,6 @@ function AppContent() {
     })();
   }, [restoreSession]);
 
-  const onStartExpedition = async () => {
-    await startSession({ mode: sensorMode, campaignToken });
-    navigate('live');
-  };
-
-  const onEndExpedition = async () => {
-    await endSession();
-    navigate('validation');
-  };
-
   if (bootError !== null) {
     return (
       <SafeAreaView style={styles.root}>
@@ -104,25 +77,19 @@ function AppContent() {
     );
   }
 
+  // NavigationContainer renders its own safe-area handling, so the stack is not
+  // wrapped in SafeAreaView here — doing so would double-inset the header.
   return (
-    <SafeAreaView style={styles.root}>
+    <>
       <StatusBar barStyle="dark-content" backgroundColor={COLORS.surface} />
-      {screen === 'welcome' ? <WelcomeAuthScreen /> : null}
-      {screen === 'enrollment' ? <CampaignEnrollmentScreen /> : null}
-      {screen === 'bleSync' ? <BleSyncScreen onModeSelected={setSensorMode} /> : null}
-      {screen === 'locationGate' ? <LocationGateScreen /> : null}
-      {screen === 'launchpad' ? <LaunchpadScreen onStart={onStartExpedition} /> : null}
-      {screen === 'live' ? <LiveRecordingScreen onEnd={onEndExpedition} /> : null}
-      {screen === 'validation' ? <ValidationScreen /> : null}
-      {screen === 'profile' ? <ProfileImpactScreen /> : null}
-      {screen === 'settings' ? <SettingsDiagnosticsScreen /> : null}
-    </SafeAreaView>
+      <RootNavigator />
+    </>
   );
 }
 
 /**
- * SafeAreaProvider must sit above every consumer of SafeAreaView, so it wraps
- * AppContent rather than living inside it.
+ * SafeAreaProvider must sit above every consumer of SafeAreaView (including
+ * React Navigation's header), so it wraps AppContent rather than living inside it.
  */
 export default function App() {
   return (

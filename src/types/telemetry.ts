@@ -38,11 +38,35 @@ export interface SensorTelemetryPacket {
   readonly receivedAtUtcMs: number;
 
   /**
-   * Ambient temperature in CELSIUS. Canonical storage unit for the entire system
-   * (matches trek_points.ambient_temp_c). Fahrenheit exists only at the
-   * presentation layer. null when the frame carried no valid temperature.
+   * ═══ THE EXTERNAL TEMPERATURE PROBE, in CELSIUS. ═══
+   *
+   * This is the scientifically meaningful reading and the ONLY one persisted to
+   * trek_points.ambient_temp_c, charted, or exported.
+   *
+   * The PL GT M92 stream carries TWO thermal channels — confirmed against a
+   * PocketLab export ("Internal Temperature Probe Jul 28 2026.csv", 68 samples
+   * at 1.00 s):
+   *   • Internal Temperature (PCB):  25.8–25.9 °C   range 0.1 °C  — near-constant
+   *   • Temperature Probe (external): 25.3–33.3 °C  range 8.0 °C  — responsive
+   *
+   * The internal channel measures the inside of the sensor's own enclosure. Using
+   * it for an Urban Heat Island transect would be meaningless — it reports the
+   * box's self-heating, not the street. It is retained for diagnostics only.
+   *
+   * Canonical unit is Celsius; Fahrenheit exists only at the presentation layer.
+   * null when the frame carried no valid external reading.
    */
   readonly ambientTempC: number | null;
+
+  /**
+   * Internal PCB temperature in CELSIUS — DIAGNOSTIC ONLY.
+   *
+   * Never written to trek_points, never charted, never exported. Surfaced on
+   * Screen 3.3 so a field operator can confirm the two channels are being told
+   * apart correctly: the internal reading should sit near room temperature and
+   * barely move, while the external probe tracks the environment.
+   */
+  readonly internalTempC: number | null;
 
   /**
    * Relative humidity, percent (0–100). null when the proxy hardware does not

@@ -16,6 +16,7 @@ import type { BleConnectionState, SensorTelemetryPacket } from '@/types/telemetr
 import { newId } from '@/utils/id';
 import {
   BleNotReadyError,
+  connectToDeviceId,
   getConnectedDeviceName,
   registerCallbacks,
   startSensorLink,
@@ -82,7 +83,31 @@ export interface ConnectSensorResult {
   recoverable?: boolean;
 }
 
-/** Connect to real hardware. Surfaces failure so Screen 1.3 can show it. */
+/**
+ * Connect to a specific peripheral the operator picked from the discovery list.
+ *
+ * Preferred over connectSensor() when several sensors are in range: it records
+ * WHICH unit produced a transect, rather than auto-binding to whichever answered
+ * the scan first.
+ */
+export async function connectSensorById(deviceId: string): Promise<ConnectSensorResult> {
+  try {
+    await connectToDeviceId(deviceId);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof BleNotReadyError) {
+      return {
+        ok: false,
+        message: e.message,
+        connectionState: e.connectionState,
+        recoverable: e.recoverable,
+      };
+    }
+    return { ok: false, message: e instanceof Error ? e.message : 'BLE link failed.' };
+  }
+}
+
+/** Connect to real hardware by the documented name. Surfaces failure for Screen 1.3. */
 export async function connectSensor(): Promise<ConnectSensorResult> {
   try {
     await startSensorLink();

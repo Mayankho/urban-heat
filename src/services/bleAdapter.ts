@@ -53,6 +53,7 @@ import {
   TEMP_PLAUSIBLE_MIN_C,
   UH_NOTIFY_CHARACTERISTIC_UUID,
   UH_SERVICE_UUID,
+  uuidEquals,
 } from '@/config/bleConstants';
 import type {
   BleConnectionState,
@@ -481,6 +482,142 @@ export async function scanForSensor(timeoutMs = BLE_SCAN_TIMEOUT_MS): Promise<De
   });
 }
 
+// ---------------------------------------------------------------------------
+// Device discovery (multi-sensor picker)
+// ---------------------------------------------------------------------------
+
+/** A named BLE peripheral seen during a discovery scan. */
+export interface DiscoveredDevice {
+  readonly id: string;
+  readonly name: string;
+  readonly rssiDbm: number | null;
+  /** True when the name matches docs/04's verified "PL GT M201" exactly. */
+  readonly isExpectedSensor: boolean;
+  /** True when the name looks PocketLab-ish but is not the documented unit. */
+  readonly isProbablePocketLab: boolean;
+}
+
+let discoveryActive = false;
+
+/** Heuristic for "this looks like a PocketLab" when the name is not an exact match. */
+function looksLikePocketLab(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.startsWith('pl ') || n.includes('pocketlab') || n.startsWith('pl-');
+}
+
+/**
+ * Scan and report EVERY named peripheral in range, rather than auto-connecting to
+ * one hardcoded name.
+ *
+ * WHY: docs/04 records "PL GT M201" as a verified field-test observation from a
+ * SINGLE unit. It does not say whether that is a model name shared by every
+ * PocketLab Voyager or a per-device name. With a bench full of sensors, an exact
+ * match silently ignores every other unit and reports "sensor not found" — which
+ * is indistinguishable from a genuine hardware fault.
+ *
+ * Listing everything answers that empirically and lets the operator choose, which
+ * also preserves scientific provenance: you know exactly which unit produced a
+ * transect, instead of auto-connecting to whichever sensor answered first.
+ *
+ * `onUpdate` receives the full deduplicated list each time it changes, sorted with
+ * the documented sensor first, then other likely PocketLabs, then everything else
+ * by signal strength.
+ */
+export async function startDiscovery(
+  onUpdate: (devices: DiscoveredDevice[]) => void,
+  durationMs = 12_000
+): Promise<void> {
+  await assertBluetoothReady();
+
+  const bleManager = getManager();
+  const found = new Map<string, DiscoveredDevice>();
+  discoveryActive = true;
+  emitState('scanning');
+
+  const publish = () => {
+    const list = [...found.values()].sort((a, b) => {
+      if (a.isExpectedSensor !== b.isExpectedSensor) return a.isExpectedSensor ? -1 : 1;
+      if (a.isProbablePocketLab !== b.isProbablePocketLab) {
+        return a.isProbablePocketLab ? -1 : 1;
+      }
+      return (b.rssiDbm ?? -999) - (a.rssiDbm ?? -999);
+    });
+    onUpdate(list);
+  };
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      discoveryActive = false;
+      bleManager.stopDeviceScan();
+      clearTimeout(timer);
+      emitState(found.size > 0 ? 'idle' : 'error');
+      resolve();
+    };
+
+    const timer = setTimeout(finish, durationMs);
+
+    bleManager.startDeviceScan(null, { allowDuplicates: false }, (error, scanned) => {
+      if (settled) return;
+
+      if (error) {
+        settled = true;
+        discoveryActive = false;
+        clearTimeout(timer);
+        bleManager.stopDeviceScan();
+        emitState('unauthorized');
+        reject(error);
+        return;
+      }
+
+      const rawName = scanned?.name ?? scanned?.localName ?? null;
+      // Unnamed peripherals are ubiquitous background noise (beacons, laptops,
+      // earbuds advertising anonymously). Showing them would bury the sensor.
+      if (scanned === null || rawName === null || rawName.trim() === '') return;
+
+      const name = rawName.trim();
+      const existing = found.get(scanned.id);
+      // Keep the strongest RSSI we have seen for this device.
+      if (existing !== undefined && (existing.rssiDbm ?? -999) >= (scanned.rssi ?? -999)) {
+        return;
+      }
+
+      found.set(scanned.id, {
+        id: scanned.id,
+        name,
+        rssiDbm: scanned.rssi ?? null,
+        isExpectedSensor: name === POCKETLAB_DEVICE_NAME,
+        isProbablePocketLab: looksLikePocketLab(name),
+      });
+      publish();
+    });
+  });
+}
+
+export function stopDiscovery(): void {
+  if (!discoveryActive) return;
+  discoveryActive = false;
+  getManager().stopDeviceScan();
+}
+
+/**
+ * Connect to a specific peripheral chosen from the discovery list.
+ *
+ * Distinguishes the two failure modes that matter:
+ *   • cannot connect at all — out of range, or already bound to another central
+ *   • connects but has no Urban Heat service — a different PocketLab model
+ *     exposing different UUIDs. Name matching is necessary but NOT sufficient.
+ */
+export async function connectToDeviceId(deviceId: string): Promise<void> {
+  stopDiscovery();
+  const bleManager = getManager();
+  const connected = await bleManager.connectToDevice(deviceId, { autoConnect: false });
+  await subscribeToConnectedDevice(connected);
+}
+
 /**
  * Connect, discover, and subscribe to the 1 Hz notification characteristic.
  * This is the full happy path from "device found" to "packets flowing".
@@ -489,11 +626,43 @@ export async function connectAndSubscribe(target: Device): Promise<void> {
   emitState('connecting', target.name ?? POCKETLAB_DEVICE_NAME);
 
   const connected = await target.connect({ autoConnect: false });
+  await subscribeToConnectedDevice(connected);
+}
+
+/** Shared tail of both connect paths: discover services, then subscribe. */
+async function subscribeToConnectedDevice(connected: Device): Promise<void> {
   device = connected;
+  emitState('connecting', connected.name ?? POCKETLAB_DEVICE_NAME);
 
   // MUST happen before monitoring, or the characteristic handle is unknown to
   // the native layer and the subscription silently never fires.
   await connected.discoverAllServicesAndCharacteristics();
+
+  // Name matching is necessary but NOT sufficient. A different PocketLab model
+  // can advertise a similar name and expose entirely different GATT services —
+  // in which case monitorCharacteristicForService would attach to nothing and the
+  // stream would simply stay silent forever, looking exactly like an R-01 failure.
+  // Verify up front so the operator gets a specific, actionable message instead.
+  const services = await connected.services();
+  const hasUrbanHeatService = services.some((s) => uuidEquals(s.uuid, UH_SERVICE_UUID));
+
+  if (!hasUrbanHeatService) {
+    const available = services.map((s) => s.uuid).join(', ') || '(none reported)';
+    try {
+      await connected.cancelConnection();
+    } catch {
+      // Already gone — nothing to clean up.
+    }
+    device = null;
+    emitState('error');
+    throw new BleNotReadyError(
+      `Connected to "${connected.name ?? 'device'}" but it does not expose the Urban Heat ` +
+        `service ${UH_SERVICE_UUID}. This is most likely a different PocketLab model. ` +
+        `Services it does expose: ${available}`,
+      'error',
+      false
+    );
+  }
 
   emitState('connected', connected.name ?? POCKETLAB_DEVICE_NAME);
 

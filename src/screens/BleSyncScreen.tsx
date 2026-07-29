@@ -5,15 +5,24 @@
  * comes BEFORE the location gate (1.4), matching the wireframe's screen order.
  * See permissionsService.ts for why that order is deliberate.
  *
- * The screen also exposes a SIMULATOR path. That is not a convenience — R-01
- * (ble-plx 3.5.1 has no New Architecture support, and RN 0.86 no longer permits
- * disabling it) and G-01 (undocumented frame layout) mean real-hardware telemetry
- * is unverified. The simulator keeps the rest of Sprint 1 demonstrable and
- * testable while those are resolved.
+ * DEVICE PICKER (rather than the wireframe's static two-row list)
+ * --------------------------------------------------------------
+ * docs/04 records "PL GT M201" as a verified observation from ONE field-test unit,
+ * and never says whether that is a model name shared by every PocketLab Voyager or
+ * a per-device name. Auto-connecting on an exact match means every other sensor on
+ * the bench is silently ignored and reported as "sensor not found" — which is
+ * indistinguishable from a real hardware fault.
+ *
+ * So we scan and list everything, mark the documented unit, and let the operator
+ * choose. That also preserves scientific provenance: the session records WHICH
+ * sensor produced the transect instead of whichever answered the scan first.
+ *
+ * The simulator path remains, because R-01 (BLE under the New Architecture) and
+ * G-01 (frame layout) are still open and must never block the rest of the app.
  */
 
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   Card,
   HeaderTitle,
@@ -22,14 +31,23 @@ import {
   PrimaryButton,
   Prompt,
   SecondaryButton,
-  Spacer,
 } from '@/components/atoms';
-import { COLORS, HEAT, SPACE } from '@/config/theme';
+import { COLORS, HEAT, SPACE, TYPE } from '@/config/theme';
 import { POCKETLAB_DEVICE_NAME } from '@/config/bleConstants';
-import { connectSensor } from '@/services/sessionController';
+import { startDiscovery, stopDiscovery, type DiscoveredDevice } from '@/services/bleAdapter';
+import { connectSensorById } from '@/services/sessionController';
 import { openBluetoothSettings, requestBlePermissions } from '@/services/permissionsService';
 import { useNavigationStore } from '@/store/useNavigationStore';
 import { selectConnection, useTelemetryStore } from '@/store/useTelemetryStore';
+
+/** Signal-strength label so the operator can tell which sensor is nearest. */
+function signalLabel(dbm: number | null): string {
+  if (dbm === null) return '—';
+  if (dbm >= -60) return `${dbm} dBm · strong`;
+  if (dbm >= -75) return `${dbm} dBm · good`;
+  if (dbm >= -85) return `${dbm} dBm · weak`;
+  return `${dbm} dBm · marginal`;
+}
 
 export function BleSyncScreen({
   onModeSelected,
@@ -38,49 +56,71 @@ export function BleSyncScreen({
 }) {
   const navigate = useNavigationStore((s) => s.navigate);
   const connection = useTelemetryStore(selectConnection);
+
+  const [devices, setDevices] = useState<DiscoveredDevice[]>([]);
   const [status, setStatus] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  /** True when the failure was specifically a powered-off radio, which has its own
-   *  one-tap remedy rather than a generic "try again". */
+  const [scanning, setScanning] = useState(false);
+  const [connectingId, setConnectingId] = useState<string | null>(null);
   const [radioOff, setRadioOff] = useState(false);
 
-  const onConnectHardware = async () => {
-    setBusy(true);
+  // NOTE ON THE GUARDRAIL: useState here is fine and does NOT breach the Task 1.2
+  // mandate. That ban covers the 1 Hz TELEMETRY stream. Scan results are a handful
+  // of low-frequency UI events that stop entirely once a device is chosen.
+  const runScan = useCallback(async () => {
+    setDevices([]);
     setRadioOff(false);
+    setScanning(true);
     setStatus('Requesting Bluetooth permissions…');
 
     const permission = await requestBlePermissions();
     if (permission.outcome === 'blocked') {
-      setBusy(false);
+      setScanning(false);
       setStatus(
         'Bluetooth permission is permanently denied. Enable it in System Settings → Apps → Urban Heat → Permissions.'
       );
       return;
     }
     if (permission.outcome === 'denied') {
-      setBusy(false);
+      setScanning(false);
       setStatus('Bluetooth permission denied. Scanning cannot proceed without it.');
       return;
     }
 
-    setStatus(`Scanning for "${POCKETLAB_DEVICE_NAME}"…`);
-    const result = await connectSensor();
-    setBusy(false);
+    setStatus('Scanning for nearby BLE devices…');
+    try {
+      await startDiscovery(setDevices);
+      setStatus(null);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Scan failed.';
+      setStatus(message);
+      setRadioOff(message.toLowerCase().includes('bluetooth is turned off'));
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
+  // Stop the radio scanning if the operator navigates away mid-scan.
+  useEffect(() => () => stopDiscovery(), []);
+
+  const onPick = async (target: DiscoveredDevice) => {
+    setConnectingId(target.id);
+    setStatus(`Connecting to "${target.name}"…`);
+
+    const result = await connectSensorById(target.id);
+    setConnectingId(null);
 
     if (result.ok) {
-      setStatus('Linked. Telemetry subscription active.');
+      setStatus(`Linked to "${target.name}". Telemetry subscription active.`);
       onModeSelected('hardware');
       navigate('locationGate');
       return;
     }
-
-    // The radio pre-flight reports its own accurate message (e.g. "Bluetooth is
-    // turned off") rather than letting a dead radio masquerade as a missing sensor.
     setStatus(result.message ?? 'Link failed.');
     setRadioOff(result.connectionState === 'bluetooth_off');
   };
 
   const onUseSimulator = () => {
+    stopDiscovery();
     onModeSelected('simulator');
     navigate('locationGate');
   };
@@ -94,33 +134,71 @@ export function BleSyncScreen({
         <LabelXS>Telemetry Array Link</LabelXS>
       </View>
 
-      <View style={styles.body}>
+      <ScrollView contentContainerStyle={styles.body}>
         {/* .radar — concentric rings with a cool-blue core */}
         <View style={styles.radar}>
           <View style={[styles.ring, styles.ring1]} />
           <View style={[styles.ring, styles.ring2]} />
           <View style={[styles.ring, styles.ring3]} />
-          <View style={styles.core} />
+          <View style={[styles.core, scanning && styles.coreActive]} />
         </View>
 
-        <View style={styles.deviceList}>
-          <Card style={styles.deviceRow}>
-            <View style={styles.deviceMeta}>
-              <Text style={styles.deviceName}>UH-Proxy-Sensor (PL Voyager)</Text>
-              <Text style={styles.deviceStatus}>
-                {linked ? 'Exposed bead probe · Linked' : `Awaiting link · ${POCKETLAB_DEVICE_NAME}`}
-              </Text>
-            </View>
-            <PillDot color={linked ? HEAT.normal : COLORS.muted} />
-          </Card>
+        <View style={styles.list}>
+          <LabelXS>
+            {scanning
+              ? 'Scanning…'
+              : devices.length > 0
+                ? `${devices.length} device${devices.length === 1 ? '' : 's'} in range`
+                : 'No devices found yet'}
+          </LabelXS>
 
-          <Card style={[styles.deviceRow, styles.scanRow]}>
-            <View style={styles.deviceMeta}>
-              <Text style={styles.deviceName}>Scanning for backup arrays…</Text>
-              <Text style={styles.deviceStatus}>Searching BLE profile broadcast</Text>
-            </View>
-            <Text style={styles.deviceStatus}>···</Text>
-          </Card>
+          {devices.map((d) => {
+            const busy = connectingId === d.id;
+            return (
+              <Pressable key={d.id} onPress={() => onPick(d)} disabled={connectingId !== null}>
+                <Card
+                  style={[
+                    styles.deviceRow,
+                    d.isExpectedSensor && styles.deviceRowExpected,
+                    connectingId !== null && !busy && styles.deviceRowDimmed,
+                  ]}
+                >
+                  <View style={styles.deviceMeta}>
+                    <Text style={styles.deviceName}>{d.name}</Text>
+                    <Text style={styles.deviceStatus}>
+                      {busy ? 'Connecting…' : signalLabel(d.rssiDbm)}
+                    </Text>
+                    {d.isExpectedSensor ? (
+                      <Text style={styles.badgeExpected}>
+                        ✓ Documented sensor ({POCKETLAB_DEVICE_NAME})
+                      </Text>
+                    ) : d.isProbablePocketLab ? (
+                      <Text style={styles.badgeMaybe}>
+                        Looks like a PocketLab — service UUIDs unverified
+                      </Text>
+                    ) : null}
+                  </View>
+                  <PillDot
+                    color={
+                      d.isExpectedSensor
+                        ? HEAT.normal
+                        : d.isProbablePocketLab
+                          ? HEAT.warn
+                          : COLORS.muted
+                    }
+                  />
+                </Card>
+              </Pressable>
+            );
+          })}
+
+          {!scanning && devices.length === 0 ? (
+            <Prompt>
+              Nothing detected. Confirm the sensor is powered on and not already
+              connected to another phone or the PocketLab app — BLE peripherals
+              accept only one connection at a time.
+            </Prompt>
+          ) : null}
         </View>
 
         {status !== null ? <Prompt>{status}</Prompt> : null}
@@ -129,12 +207,16 @@ export function BleSyncScreen({
           <SecondaryButton label="Open Bluetooth Settings" onPress={openBluetoothSettings} />
         ) : null}
 
-        <Spacer />
+        {linked ? (
+          <Text style={styles.linkedNote}>● Link established — telemetry flowing.</Text>
+        ) : null}
+      </ScrollView>
 
+      <View style={styles.footer}>
         <PrimaryButton
-          label={busy ? 'Linking…' : 'Link Hardware Sensor'}
-          onPress={onConnectHardware}
-          disabled={busy}
+          label={scanning ? 'Scanning…' : devices.length > 0 ? 'Scan Again' : 'Scan for Sensors'}
+          onPress={runScan}
+          disabled={scanning || connectingId !== null}
         />
         <SecondaryButton label="Use 1 Hz simulator (dev)" onPress={onUseSimulator} />
       </View>
@@ -147,9 +229,14 @@ const RADAR_SIZE = 150;
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: COLORS.bg },
   header: { padding: SPACE.s3, paddingBottom: SPACE.s2, gap: 4 },
-  body: { flex: 1, alignItems: 'center', paddingHorizontal: SPACE.s3, gap: SPACE.s3 },
-  radar: { width: RADAR_SIZE, height: RADAR_SIZE, marginTop: SPACE.s2 },
-  ring: { position: 'absolute', borderWidth: 1, borderColor: COLORS.border, borderRadius: RADAR_SIZE },
+  body: { alignItems: 'center', paddingHorizontal: SPACE.s3, gap: SPACE.s2, paddingBottom: SPACE.s2 },
+  radar: { width: RADAR_SIZE, height: RADAR_SIZE, marginTop: SPACE.s1 },
+  ring: {
+    position: 'absolute',
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: RADAR_SIZE,
+  },
   ring1: { top: 0, left: 0, right: 0, bottom: 0 },
   ring2: { top: 28, left: 28, right: 28, bottom: 28 },
   ring3: { top: 56, left: 56, right: 56, bottom: 56 },
@@ -160,12 +247,18 @@ const styles = StyleSheet.create({
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: HEAT.cool,
+    backgroundColor: COLORS.muted,
   },
-  deviceList: { width: '100%', gap: SPACE.s1 },
+  coreActive: { backgroundColor: HEAT.cool },
+  list: { width: '100%', gap: SPACE.s1 },
   deviceRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  scanRow: { opacity: 0.55 },
-  deviceMeta: { gap: 3, flexShrink: 1 },
+  deviceRowExpected: { borderColor: HEAT.normal },
+  deviceRowDimmed: { opacity: 0.45 },
+  deviceMeta: { gap: 3, flexShrink: 1, paddingRight: SPACE.s1 },
   deviceName: { fontSize: 12, fontWeight: '600', color: COLORS.text },
-  deviceStatus: { fontSize: 10, color: COLORS.muted },
+  deviceStatus: { fontSize: 10, color: COLORS.muted, fontFamily: TYPE.monoFamily },
+  badgeExpected: { fontSize: 9, color: HEAT.normal, fontWeight: '700' },
+  badgeMaybe: { fontSize: 9, color: HEAT.crit, fontWeight: '600' },
+  linkedNote: { fontSize: 11, color: HEAT.normal, fontWeight: '600' },
+  footer: { padding: SPACE.s3, gap: SPACE.s1 },
 });
